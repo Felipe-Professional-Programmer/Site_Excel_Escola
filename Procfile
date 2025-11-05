@@ -1,0 +1,1 @@
+web: sh setup.sh && streamlit run whatsapp_excel_integrator.py --server.port $PORT --server.enableCORS false

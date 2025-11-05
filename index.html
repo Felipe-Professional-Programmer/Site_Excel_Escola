@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Excel to WhatsApp Sender (DeepSeekR1T2)</title>
+    <!-- Módulo 15: Dependência Essencial (SheetJS) para Parsing de Arquivos -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        /* Módulo 3: Programming Focus Lock - Estilização Responsiva e Moderna */
+        :root {
+            --primary-color: #25d366; /* WhatsApp Green */
+            --secondary-color: #075e54;
+            --background-color: #f0f2f5;
+            --card-color: #ffffff;
+            --shadow-light: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--background-color);
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background-color: var(--card-color);
+            border-radius: 12px;
+            box-shadow: var(--shadow-light);
+            padding: 30px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: var(--secondary-color);
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.8em;
+        }
+
+        /* Área de Upload e Status */
+        .input-area {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+        }
+
+        #status-message {
+            font-weight: bold;
+            text-align: center;
+            color: #333;
+            min-height: 20px;
+        }
+
+        input[type="file"] {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+
+        /* Botão Principal */
+        .btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s, opacity 0.3s;
+            width: 100%;
+            font-size: 1.1em;
+            margin-top: 10px;
+        }
+
+        .btn-whatsapp {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-whatsapp:hover:not(:disabled) {
+            background-color: #128c7e;
+        }
+
+        .btn-whatsapp:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        /* Tabela de Dados */
+        .table-container {
+            margin-top: 30px;
+            overflow-x: auto;
+            max-height: 400px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+
+        .data-table th, .data-table td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        .data-table th {
+            background-color: #f8f8f8;
+            color: var(--secondary-color);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .data-table tbody tr:nth-child(even) {
+            background-color: #fcfcfc;
+        }
+
+        /* Responsividade para Mobile */
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+            .data-table th, .data-table td {
+                padding: 10px;
+            }
+            .btn {
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>AI Excel to WhatsApp Sender</h1>
+
+        <div class="input-area">
+            <label for="excel-file">1. Selecione seu arquivo Excel (.xlsx ou .xls):</label>
+            <input type="file" id="excel-file" accept=".xlsx,.xls">
+            <div id="status-message">Aguardando arquivo...</div>
+        </div>
+
+        <!-- Módulo 39: Loop de Feedback - Botão de Ação -->
+        <button class="btn btn-whatsapp" id="start-whatsapp-process" disabled>
+            2. Iniciar Envio no WhatsApp
+        </button>
+
+        <div class="table-container" id="data-preview-container" style="display:none;">
+            <table class="data-table" id="data-preview-table">
+                <thead>
+                    <tr>
+                        <!-- Estes cabeçalhos serão atualizados após a detecção da AI -->
+                        <th>Nome (AI)</th>
+                        <th>Número Limpo (AI)</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <script>
+        // =================================================
+        // JAVASCRIPT: Lógica de Parsing, AI e WhatsApp
+        // =================================================
+
+        // Módulo 37: Gerenciamento de Dependências - Novo endpoint do backend Flask
+        const BACKEND_ENDPOINT = "http://127.0.0.1:5000/api/detect-columns";
+        // A chave de API agora está armazenada e usada no servidor Python!
+        
+        // Código de país padrão (55 para Brasil, usado na lógica de limpeza)
+        const DEFAULT_COUNTRY_CODE = '55'; 
+
+        const fileInput = document.getElementById('excel-file');
+        const statusMessage = document.getElementById('status-message');
+        const startButton = document.getElementById('start-whatsapp-process');
+        const tableBody = document.querySelector('#data-preview-table tbody');
+        const tableContainer = document.getElementById('data-preview-container');
+
+        let parsedData = [];
+        let nameKey = null;
+        let numberKey = null;
+
+        /**
+         * Módulo 22: Otimização de Código - Limpeza e Formatação de Números
+         * Função O(N) para limpar o número e garantir o código de país.
+         * @param {string} number - O número de telefone.
+         * @returns {string} O número limpo e formatado.
+         */
+        function cleanAndFormatNumber(number) {
+            if (!number) return '';
+            
+            let cleaned = String(number).replace(/\D/g, '');
+
+            // Módulo 13: Inductive Generalization - Aplica regra geral para números nacionais.
+            if (cleaned.length >= 8 && cleaned.length <= 11 && !cleaned.startsWith(DEFAULT_COUNTRY_CODE)) {
+                return DEFAULT_COUNTRY_CODE + cleaned;
+            }
+            return cleaned;
+        }
+
+        /**
+         * Módulo 4: Simulação de Chamada - AGORA CHAMA O SERVIDOR PYTHON
+         * Envia cabeçalhos e amostra de dados para o servidor Python, que chama a IA.
+         * @param {Array<string>} headers - Lista de cabeçalhos da planilha.
+         * @param {Object} sampleRow - Uma linha de exemplo dos dados.
+         */
+        async function detectColumnsWithAI(headers, sampleRow) {
+            statusMessage.textContent = "🤖 Enviando dados para o Backend Python para análise com IA...";
+
+            const payload = {
+                headers: headers,
+                sample_row: sampleRow
+            };
+
+            try {
+                // Módulo 3: Programming Focus Lock - Foco na comunicação com o backend
+                const response = await fetch(BACKEND_ENDPOINT, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    // Módulo 23: Tratamento de Erros - Erro de comunicação com o backend
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(`Backend Error: ${response.status} - ${errorData.error || response.statusText}. Por favor, verifique se o servidor Python está rodando (python openrouter_backend_api.py).`);
+                }
+
+                // A resposta final deve ser o JSON limpo do AI
+                const aiResult = await response.json();
+                
+                if (aiResult.name_key && aiResult.number_key) {
+                    // Módulo 1: Quantum Super Programmer - Sucesso na Identificação
+                    nameKey = aiResult.name_key;
+                    numberKey = aiResult.number_key;
+                    statusMessage.textContent = `✅ Sucesso! Backend Python (Flask) retornou: Nome='${nameKey}', Número='${numberKey}'.`;
+                    return true;
+                } else {
+                    // Módulo 23: Tratamento de Exceção - Falha na Estrutura JSON
+                    throw new Error("Backend retornou uma resposta da IA que estava faltando 'name_key' ou 'number_key'.");
+                }
+
+            } catch (error) {
+                console.error("Erro na comunicação com o Backend:", error);
+                statusMessage.textContent = `❌ Erro de Integração: ${error.message}. Certifique-se de que o servidor Python está ativo na porta 5000.`;
+                startButton.disabled = true;
+                return false;
+            }
+        }
+
+        /**
+         * Módulo 15: Síntese Holística - Manipula o evento de upload do arquivo.
+         */
+        fileInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Resetar estado
+            startButton.disabled = true;
+            tableBody.innerHTML = '';
+            tableContainer.style.display = 'none';
+            statusMessage.textContent = `Arquivo carregado: ${file.name}. Lendo dados...`;
+
+            try {
+                // Leitura do arquivo (SheetJS)
+                const data = await file.arrayBuffer();
+                const workbook = XLSX.read(data, { type: 'array' });
+                // Assume a primeira planilha
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                
+                // Converte a planilha para JSON, preservando cabeçalhos exatos
+                const json = XLSX.utils.sheet_to_json(worksheet);
+                parsedData = json;
+
+                if (parsedData.length === 0) {
+                    statusMessage.textContent = "❌ Erro: O arquivo Excel está vazio.";
+                    return;
+                }
+
+                // Extrai headers e sample (necessário para a AI)
+                const headers = Object.keys(parsedData[0]);
+                const sampleRow = parsedData[0];
+                
+                // Módulo 4: Chamada de AI (via Backend) para mapeamento
+                const aiSuccess = await detectColumnsWithAI(headers, sampleRow);
+
+                if (aiSuccess) {
+                    // Prepara a visualização dos dados
+                    renderTablePreview(parsedData);
+                    startButton.disabled = false;
+                }
+
+            } catch (error) {
+                console.error("Erro ao processar o arquivo:", error);
+                // Módulo 23: Tratamento de Exceções Robustas
+                statusMessage.textContent = `❌ Erro ao ler o Excel: ${error.message}. Certifique-se de que é um arquivo .xlsx/.xls válido.`;
+            }
+        });
+
+        /**
+         * Módulo 26: Construtor de Respostas - Renderiza a tabela de visualização.
+         * @param {Array<Object>} data - Os dados JSON da planilha.
+         */
+        function renderTablePreview(data) {
+            tableBody.innerHTML = '';
+            
+            // Reconstroi os cabeçalhos da tabela para mostrar a detecção da AI
+            const tableHead = document.querySelector('#data-preview-table thead tr');
+            tableHead.innerHTML = `
+                <th>Nome Detectado (${nameKey})</th>
+                <th>Número Limpo (${numberKey})</th>
+                <th>Status</th>
+            `;
+            
+            // Módulo 38: Scalability Tester - Limita a visualização para grandes datasets
+            const previewLimit = 50;
+            const dataToPreview = data.slice(0, previewLimit);
+            const isTruncated = data.length > previewLimit;
+
+            dataToPreview.forEach((row, index) => {
+                const name = row[nameKey] || 'N/A';
+                const originalNumber = row[numberKey];
+                const formattedNumber = cleanAndFormatNumber(originalNumber);
+                
+                const tr = document.createElement('tr');
+                tr.dataset.index = index;
+                tr.innerHTML = `
+                    <td>${name}</td>
+                    <td>${formattedNumber}</td>
+                    <td data-status="pending">Aguardando...</td>
+                `;
+                tableBody.appendChild(tr);
+            });
+
+            if (isTruncated) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="3" style="text-align:center; font-style:italic;">... E mais ${data.length - previewLimit} contatos. Apenas os ${previewLimit} primeiros são exibidos.</td>`;
+                tableBody.appendChild(tr);
+            }
+
+            tableContainer.style.display = 'block';
+        }
+
+
+        /**
+         * Módulo 25: Resource Constraint Handler - Inicia o processo de abertura de chats no WhatsApp.
+         */
+        startButton.addEventListener('click', () => {
+            if (parsedData.length === 0 || !nameKey || !numberKey) {
+                statusMessage.textContent = "❌ Nenhum dado carregado ou colunas não identificadas.";
+                return;
+            }
+
+            // Mensagem de registro pré-preenchida
+            // Módulo 32: Inclusão Cultural - Usa placeholder neutro {name}
+            const baseMessage = "Olá {name}, esta é uma mensagem automática para confirmar seu registro. Por favor, responda 'SIM' para completar.";
+            
+            statusMessage.textContent = "⚠️ Iniciando aberturas de chat. PERMITA POP-UPS do seu navegador.";
+            startButton.disabled = true;
+
+            let delay = 0;
+            const DELAY_MS = 500; // 500ms de atraso (Módulo 25: ajuda a mitigar bloqueio de pop-up)
+            
+            parsedData.forEach((row, index) => {
+                const name = row[nameKey] || 'Contato';
+                const originalNumber = row[numberKey];
+                const number = cleanAndFormatNumber(originalNumber);
+                
+                if (number.length < 10) { // Módulo 20: Teste Edge Case - Ignora números muito curtos
+                    const rowElement = document.querySelector(`tr[data-index='${index}'] td[data-status]`);
+                    if (rowElement) {
+                        rowElement.textContent = 'Número Inválido';
+                        rowElement.style.color = 'red';
+                    }
+                    return;
+                }
+
+                const personalizedMessage = baseMessage.replace('{name}', name);
+                const encodedMessage = encodeURIComponent(personalizedMessage);
+                // Módulo 2: Safety Check - URL de protocolo seguro (https)
+                const whatsappURL = `https://wa.me/${number}?text=${encodedMessage}`;
+                
+                // Módulo 25: Resource Constraint Handler - Usa setTimeout para controle de fluxo
+                setTimeout(() => {
+                    const rowElement = document.querySelector(`tr[data-index='${index}'] td[data-status]`);
+                    
+                    // Simulação de Verificação: window.open deve ser envolvido em try/catch
+                    try {
+                        window.open(whatsappURL, '_blank');
+                        if (rowElement) {
+                            rowElement.textContent = '✅ Chat Aberto';
+                            rowElement.style.color = 'var(--primary-color)';
+                        }
+                    } catch (e) {
+                        if (rowElement) {
+                            rowElement.textContent = '❌ Bloqueado';
+                            rowElement.style.color = 'darkorange';
+                        }
+                        statusMessage.textContent = "❌ Pop-up bloqueado. Permita os pop-ups e tente novamente.";
+                    }
+                    
+                    // Reabilita o botão após a última iteração
+                    if (index === parsedData.length - 1) {
+                        startButton.disabled = false;
+                        statusMessage.textContent = "Processo de abertura concluído. Verifique suas novas abas.";
+                    }
+
+                }, delay);
+
+                delay += DELAY_MS; 
+            });
+            
+            // Módulo 20: Simulação de Teste Unitário (Finalização do Processo)
+            // if (delay > parsedData.length * DELAY_MS) console.log("Final process check: All iterations scheduled.");
+
+        });
+
+    </script>
+</body>
+</html>
