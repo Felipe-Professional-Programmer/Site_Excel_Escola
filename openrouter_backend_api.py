@@ -74,8 +74,15 @@ def detect_columns_endpoint():
     if not headers or not sample_row:
         return jsonify({"error": "Missing 'headers' or 'sample_row' in request body"}), 400
 
-    # Módulo 40: Deployment Wrapper - Prompt Estruturado (ATUALIZADO com Deep System Prompt e Vetor Textual)
-    # Este é o prompt unificado, garantindo que o System Prompt venha "antes de qualquer coisa".
+    # ----------------------------------------------------------------------
+    # MODIFICAÇÃO: Converte a linha de amostra em Matriz Unidimensional de Texto Puro
+    # ----------------------------------------------------------------------
+    
+    # Mapeia todos os valores da linha de amostra para string e junta-os com vírgulas
+    # Ex: {"Nome": "Alice", "Telefone": 5511} -> "Alice, 5511, ..."
+    matriz_unidimensional_texto = ', '.join(map(str, sample_row.values()))
+
+    # Módulo 40: Deployment Wrapper - Prompt Estruturado
     ai_prompt = f"""
 # DEEP SYSTEM PROMPT: ANALISTA DE DADOS E MAPEAMENTO
 Você é um Analista de Dados de Alto Nível com foco em extração de metadados de planilhas.
@@ -86,14 +93,15 @@ Você DEVE retornar APENAS um objeto JSON válido, contendo as chaves 'name_key'
 Não inclua texto explicativo, introdução, ou qualquer formatação Markdown extra (como ```json).
 O seu trabalho se resume a retornar o JSON final.
 
-# DADOS CONVERTIDOS DA TABELA EXCEL (VETOR TEXTUAL)
-A tabela Excel foi convertida para o seguinte formato de vetor textual para análise:
+# DADOS CONVERTIDOS DA TABELA EXCEL (MATRIZ UNIDIMENSIONAL DE TEXTO)
+A tabela Excel foi convertida para o seguinte formato de matriz textual para análise:
 
 COLUNAS (Títulos):
 [{', '.join(headers)}]
 
-LINHA DE AMOSTRA (Valores):
-{json.dumps(sample_row, ensure_ascii=False, indent=2)}
+LINHA DE AMOSTRA (Valores em ordem):
+[{matriz_unidimensional_texto}]
+
 Com base nas COLUNAS e na LINHA DE AMOSTRA fornecidas, identifique as chaves 'name_key' e 'number_key'.
 
 Retorne APENAS o JSON conforme instruído no Deep System Prompt.
