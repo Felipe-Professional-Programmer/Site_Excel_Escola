@@ -8,349 +8,387 @@ from typing import Optional, Dict, Any
 
 # --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO ---
 
-# Módulo de Limpeza de Número de Telefone (CRITICAL)
-def clean_and_standardize_phone(number: str, default_country_code: str) -> Optional[str]:
+# Módulo de Limpeza e Padronização de Número de Telefone (CRITICAL)
+def clean_and_standardize_phone(number: str) -> Dict[str, Optional[str]]:
     """
-    Limpa o número de telefone, removendo caracteres não-dígitos e
-    garantindo o formato E.164 (código do país + DDD + Número),
-    com lógica avançada de inferência de prefixos (55 + 31).
+    Limpa e padroniza o número de telefone de acordo com regras estritas:
+    1. Sanitização completa (remove todos os caracteres não-dígitos).
+    2. Validação de formato (11 ou 13 dígitos) para telefonia móvel brasileira.
+    3. Validação do prefixo '55' (Código do País) e do '9' (Dígito de celular).
+    4. Formatação EXATA: "+55 (DDD) 9XXXX-XXXX".
+
+    Retorna um dicionário com o número formatado (formatted_number), o número limpo para API (api_number)
+    e uma mensagem de erro (error_detail).
+    """
     
-    A lógica foca no Brasil (55) mas é ajustável via `default_country_code`.
-    """
+    # 1. Sanitização Completa (remover todos os '+', '(', ')' e espaços em branco)
     if not number:
-        return None
+        return {"formatted_number": None, "api_number": None, "error_detail": "NÚMERO VAZIO."}
     
-    # PASSO 1 CRÍTICO: Converte para string e remove TODOS os caracteres não-dígitos
-    # Esta é a base de todas as regras.
+    # Remove todos os caracteres não-dígitos, garantindo que o número seja puro
     cleaned_number = re.sub(r'\D', '', str(number))
     
-    # ----------------------------------------------------------------------
-    # LÓGICA AVANÇADA DE PADRONIZAÇÃO (Baseado em 55 e 31)
-    # ----------------------------------------------------------------------
-    
-    # Assume que o CC é os 2 primeiros dígitos e o DD é o restante da string de configuração
-    CC = default_country_code[:2] if len(default_country_code) >= 2 else "55" 
-    DD = default_country_code[2:4] if len(default_country_code) >= 4 else "31"
-    
-    # Verifica se o número já tem o CC (Ex: 55)
-    has_cc = cleaned_number.startswith(CC)
-    
     phone_length = len(cleaned_number)
+    
+    # 2. Lógica de Padronização
+    final_number = None
+    error_detail = None
 
-    # NOVO REQUISITO: Descartar números com exatamente 10 dígitos (Ambíguos/Incompletos)
-    if phone_length == 10:
-        return None
-
-    # Caso 1: Número Local (8 ou 9 dígitos). Faltam CC e DD.
-    if phone_length in [8, 9]:
-        # Completa com o CC e DD padrão (Ex: 55 + 31 + 987654321)
-        final_number = CC + DD + cleaned_number
-        return re.sub(r'\D', '', final_number)
-
-    # Caso 2: Número com DDD (11 dígitos). Falta o CC.
-    # Ex: 31987654321
-    if phone_length == 11:
-        # Verifica se começa com o DDD configurado (Ex: 31)
-        if cleaned_number.startswith(DD):
-            # Completa com o CC (Ex: 55 + 31987654321)
-            final_number = CC + cleaned_number
-            return re.sub(r'\D', '', final_number)
+    if phone_length == 13:
+        # Caso 1: Número já está no formato E.164 (55DD9XXXXXXXX)
+        if cleaned_number.startswith('55'):
+            final_number = cleaned_number
         else:
-            # Não começa com o DDD configurado, mas tem 11 dígitos.
-            # Assumimos que o CC está faltando, completamos para ser seguro.
-            final_number = CC + cleaned_number
-            return re.sub(r'\D', '', final_number)
+            # Tem 13 dígitos, mas não é 55 no início.
+            error_detail = "ERRO: 13 dígitos, mas os 2 primeiros NÃO são '55' (CC Brasil)."
+            
+    elif phone_length == 11:
+        # Caso 2: Número está no formato DD9XXXXXXXX (sem o 55)
+        # Sua regra: Se tem 11 dígitos, se começar com 55, é INVÁLIDO (incompleto).
+        if cleaned_number.startswith('55'):
+            error_detail = "ERRO: 11 dígitos e começa com '55'. Número incompleto (DDD faltando)."
+        else:
+            # Assume que é DD9XXXXXXXX e corrige prefixando o 55
+            final_number = '55' + cleaned_number
+            
+    elif phone_length == 10:
+        # Caso 3: Descartar exatamente 10 dígitos (Formato ambíguo/inválido para celular)
+        error_detail = "ERRO: 10 dígitos. Formato ambíguo ou inválido."
+
+    else:
+        # Caso 4: Outros comprimentos são descartados
+        error_detail = f"ERRO: {phone_length} dígitos. Comprimento inválido (Esperado 11 ou 13)."
 
 
-    # Caso 3: Número Internacional Completo (12 ou 13 dígitos).
-    # Ex: 5531987654321 (13 digitos)
-    if phone_length in [12, 13]:
-        # Se já começa com o CC (55), está correto.
-        if has_cc:
-            return cleaned_number
-        # Se não tem o CC, e tem 12 ou 13, assumimos que o CC está faltando.
-        final_number = CC + cleaned_number
-        return re.sub(r'\D', '', final_number)
+    # 3. Execução da Validação Estrita (Apenas se um final_number foi determinado)
+    if final_number:
+        # Garante que o número final tem 13 dígitos para as próximas verificações
+        if len(final_number) != 13:
+            # Proteção: Se chegou aqui e não tem 13 dígitos, é falha interna
+            error_detail = "ERRO INTERNO: Número não padronizado para 13 dígitos."
+            final_number = None
+            
+        # Verifica se o 5º dígito (após CC e DDD) é '9', indicando celular
+        elif final_number[4] != '9':
+            error_detail = "ERRO: Não é celular (5º dígito depois do CC+DDD não é '9')."
+            final_number = None
+
+    
+    # 4. Montagem do Resultado e Formatação Final
+    if final_number and not error_detail:
+        # Extração das partes (garantida por ser 13 dígitos)
+        country_code = final_number[0:2] # 55
+        ddd = final_number[2:4]         # Ex: 31
+        first_digit = final_number[4]   # O 9
+        first_four = final_number[5:9]  # Primeiros 4 do número
+        last_four = final_number[9:13]  # Últimos 4 do número
         
-    # Caso 4: Outros tamanhos (Muito longo).
-    # Se for muito longo, mas começar com o CC, aceita. Caso contrário, descarta.
-    if phone_length > 13 and has_cc:
-        return cleaned_number
+        # Formatação EXATA SOLICITADA: "+55 (DDD) 9XXXX-XXXX"
+        formatted_number = f"+{country_code} ({ddd}) {first_digit}{first_four}-{last_four}"
 
-    # Se nenhuma regra de padronização se aplicou ou se o número é inválido
-    return None 
+        return {
+            "formatted_number": formatted_number,
+            "api_number": final_number, # 55DD9XXXXXXXX (somente dígitos)
+            "error_detail": None 
+        }
+
+    return {
+        "formatted_number": None,
+        "api_number": None, 
+        "error_detail": error_detail if error_detail else "FALHA DESCONHECIDA NA PADRONIZAÇÃO."
+    }
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
-def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, default_country_code: str) -> str:
-    """Gera o conteúdo de um único arquivo VCF (vCard) a partir do DataFrame."""
+def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str) -> str:
+    """Gera o conteúdo completo do arquivo VCF a partir do DataFrame."""
     vcf_blocks = []
     
-    for _, row in df.iterrows():
-        # Usa .get() para segurança, lidando com NaN e None
-        name = str(row.get(name_col, '')).strip()
-        original_phone = str(row.get(phone_col, '')).strip()
+    # Adiciona um cabeçalho VCF universal
+    vcf_blocks.append("BEGIN:VCARD\nVERSION:3.0\nPRODID:-//WhatsApp/Streamlit VCF Generator//EN")
+    
+    for index, row in df.iterrows():
+        # Pega o nome e o número bruto
+        full_name = str(row[name_col]).strip()
+        raw_phone = row[phone_col]
         
-        # Limpeza do número
-        cleaned_phone = clean_and_standardize_phone(original_phone, default_country_code)
+        # Limpa e padroniza o número
+        validation_result = clean_and_standardize_phone(raw_phone)
+        api_number = validation_result['api_number']
         
-        if name and cleaned_phone:
-            vcf_block = f"""BEGIN:VCARD
+        # Ignora contatos inválidos ou sem nome
+        if not api_number or not full_name:
+            continue
+        
+        # Monta o bloco VCF para cada contato
+        vcf_block = f"""
+BEGIN:VCARD
 VERSION:3.0
-FN:{name}
-N:;{name};;;
-TEL;TYPE=CELL:{cleaned_phone}
-END:VCARD"""
-            vcf_blocks.append(vcf_block)
-            
-    return '\n'.join(vcf_blocks)
+FN:{full_name}
+N:;{full_name};;;
+TEL;TYPE=CELL:{api_number}
+END:VCARD
+"""
+        vcf_blocks.append(vcf_block.strip())
+
+    return "\n".join(vcf_blocks)
 
 # --- PATH B: WHATSAPP CLOUD API INTEGRATION ---
 
 def send_whatsapp_template_message(
-    phone_number_id: str, 
+    df: pd.DataFrame, 
+    name_col: str, 
+    phone_col: str, 
     access_token: str, 
-    recipient_number: str, 
-    template_name: str, 
-    contact_name: str
-) -> Dict[str, Any]:
-    """Envia uma mensagem de template via WhatsApp Cloud API."""
+    phone_number_id: str, 
+    template_name: str
+) -> pd.DataFrame:
+    """Envia mensagens usando o WhatsApp Cloud API."""
     
-    # 1. Constrói o URL da API
-    url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
+    # URL da API da Meta (versão 19.0)
+    API_URL = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
     
-    # 2. Constrói o payload da mensagem (assumindo o placeholder {{1}} para o nome)
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": recipient_number,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {
-                "code": "pt_BR"
-            },
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {
-                            # Substitui o placeholder {{1}} pelo nome do contato
-                            "type": "text",
-                            "text": contact_name 
-                        }
-                    ]
-                }
-            ]
-        }
-    }
-    
-    # 3. Define os cabeçalhos de autenticação
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status() # Lança exceção para códigos de status HTTP 4xx/5xx
-        return {"status": "Success", "data": response.json()}
-    except requests.exceptions.HTTPError as e:
-        # Erros da API (ex: token inválido, template não encontrado)
-        error_detail = e.response.json().get('error', {}).get('message', 'Erro HTTP desconhecido.')
-        return {"status": "Failure", "detail": f"HTTP Error: {e.response.status_code}. Detalhe: {error_detail}"}
-    except requests.exceptions.RequestException as e:
-        # Erros de conexão (ex: timeout, DNS)
-        return {"status": "Failure", "detail": f"Erro de Conexão: {e}"}
+    results = []
 
-# --- II. ESTRUTURA E INTERFACE DO STREAMLIT ---
+    for index, row in df.iterrows():
+        full_name = str(row[name_col]).strip()
+        raw_phone = row[phone_col]
+        
+        # 1. Validação e Padronização
+        validation_result = clean_and_standardize_phone(raw_phone)
+        api_number = validation_result['api_number'] # Número limpo (55DD9XXXXXXXX)
+        
+        if not api_number:
+            # Adiciona erro ao relatório e continua
+            results.append({
+                'Nome': full_name,
+                'Número Original': raw_phone,
+                'Status': 'FALHA',
+                'Detalhe do Erro': validation_result['error_detail']
+            })
+            continue
+
+        # 2. Construção do Payload (JSON) para a Meta API
+        # O número deve ser prefixado com "+" para o 'to' da API, mas 'api_number' já é E.164 limpo.
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": api_number, 
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {
+                    "code": "pt_BR" # Assumindo Português do Brasil para o template
+                },
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {
+                                "type": "text",
+                                # Passa o nome completo como primeiro parâmetro do template ({{1}})
+                                "text": full_name 
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        
+        # 3. Envio da Requisição POST
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                # Sucesso: Extrai o ID da mensagem
+                message_id = response.json().get('messages', [{}])[0].get('id', 'N/A')
+                results.append({
+                    'Nome': full_name,
+                    'Número Original': raw_phone,
+                    'Status': 'SUCESSO',
+                    'Detalhe do Erro': f'Mensagem ID: {message_id}'
+                })
+            else:
+                # Falha da API: Retorna o erro
+                error_data = response.json().get('error', {}).get('message', 'Erro desconhecido da API')
+                results.append({
+                    'Nome': full_name,
+                    'Número Original': raw_phone,
+                    'Status': 'FALHA',
+                    'Detalhe do Erro': f'HTTP {response.status_code}: {error_data}'
+                })
+        
+        except requests.exceptions.RequestException as e:
+            # Erro de conexão/timeout
+            results.append({
+                'Nome': full_name,
+                'Número Original': raw_phone,
+                'Status': 'FALHA',
+                'Detalhe do Erro': f'Erro de Conexão: {e}'
+            })
+        
+        # Pausa para evitar limites de taxa de API (rate limits)
+        time.sleep(0.5) 
+        
+    return pd.DataFrame(results)
+
+# --- II. INTERFACE DO USUÁRIO (STREAMLIT) ---
 
 def main():
+    """Função principal que constrói a interface do Streamlit."""
+    
     st.set_page_config(
-        page_title="AI Excel-to-WhatsApp Sender",
-        layout="wide",
-        initial_sidebar_state="collapsed" 
+        page_title="Excel-to-WhatsApp Integrator",
+        layout="centered",
+        initial_sidebar_state="auto"
     )
-    
-    st.title("🚀 Conversor Excel/CSV para Contatos/WhatsApp")
-    st.markdown("Automatize a integração de contatos da sua planilha para o celular (VCF) ou para o WhatsApp Business Cloud API.")
-    st.markdown("---")
 
-    # --- Step 1: Upload & Map ---
-    
-    st.header("1. Upload e Mapeamento de Dados")
-    uploaded_file = st.file_uploader("Selecione seu arquivo (.xlsx, .xls ou .csv)", type=["xlsx", "xls", "csv"])
+    st.title("🤖 Excel/CSV para WhatsApp (v3.0)")
+    st.caption("Ferramenta de padronização e envio em lote para contatos móveis brasileiros.")
+
+    # 1. Upload do Arquivo
+    uploaded_file = st.file_uploader(
+        "1. Faça o upload do seu arquivo de contatos (.xlsx ou .csv)",
+        type=['xlsx', 'xls', 'csv']
+    )
 
     if uploaded_file is not None:
         try:
-            # Carrega o DataFrame
+            # Determina o tipo de arquivo para o Pandas
             if uploaded_file.name.endswith('.csv'):
-                # Tenta ler CSV com detecção automática de delimitador/encoding
-                df = pd.read_csv(uploaded_file, encoding='utf-8', sep=None, engine='python')
+                df = pd.read_csv(uploaded_file)
             else:
-                # Usa BytesIO para garantir a compatibilidade com Streamlit e pandas
-                df = pd.read_excel(uploaded_file, engine='openpyxl')
+                # Assume Excel (.xlsx ou .xls)
+                df = pd.read_excel(uploaded_file)
             
-            st.session_state['df'] = df
-            columns = df.columns.tolist()
+            # Limpa nomes de colunas (remove espaços extras)
+            df.columns = df.columns.str.strip()
             
-            st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
-            
-            # Mapeamento de Colunas
-            col1, col2 = st.columns(2)
-            
-            # Lógica de Pré-Seleção Modificada
-            
-            # 1. Coluna do Nome: Procura "Responsável"
-            default_name_index = next((i for i, col in enumerate(columns) if 'responsável' in col.lower()), 0)
-            
-            with col1:
-                name_col = st.selectbox("Coluna do Nome Completo:", columns, index=default_name_index, key='name_col_select')
-            
-            # 2. Coluna do Telefone: Procura "Telefone"
-            default_phone_index = next((i for i, col in enumerate(columns) if 'telefone' in col.lower()), 0)
-            
-            with col2:
-                phone_col = st.selectbox("Coluna do Número de Telefone:", columns, index=default_phone_index, key='phone_col_select')
-            
-            cc_col, ddd_col = st.columns([1, 2])
-            with ddd_col:
-                default_cc_ddd = st.text_input(
-                    "Código de País e DDD Padrão (Ex: 5531):", 
-                    value="5531",
-                    help="Código de País (Ex: 55) + DDD (Ex: 31). Essencial para padronizar números locais."
-                )
-            
-            st.session_state['name_col'] = name_col
-            st.session_state['phone_col'] = phone_col
-            st.session_state['default_cc'] = re.sub(r'\D', '', default_cc_ddd) # Limpa e armazena
-            
-            st.markdown("---")
+            st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso! Linhas: {len(df)}")
 
-            # --- Step 2: Choose Path & Execute ---
-            st.header("2. Escolha o Caminho de Integração")
-            path = st.radio(
-                "Selecione sua necessidade:",
-                ('PATH A: Geração de VCF (Agenda Pessoal)', 'PATH B: Integração WhatsApp Cloud API (Empresarial)'),
-                index=0, key='path_select'
+            # Nomes das colunas para os dropdowns
+            column_names = df.columns.tolist()
+
+            # --- Lógica de Pré-Seleção (Baseada na solicitação do usuário) ---
+            
+            # Tenta encontrar a coluna 'Responsável' (ignora case)
+            default_name_index = next((i for i, col in enumerate(column_names) if 'RESPONSÁVEL' in col.upper()), 0)
+            
+            # Tenta encontrar a coluna 'Telefone' (ignora case)
+            default_phone_index = next((i for i, col in enumerate(column_names) if 'TELEFONE' in col.upper()), 0)
+            
+            # 2. Mapeamento de Colunas
+            st.subheader("2. Mapeamento de Colunas")
+
+            name_col = st.selectbox(
+                "Coluna do Nome Completo (Responsável):",
+                column_names,
+                index=default_name_index,
+                help="Selecione a coluna que contém o nome da pessoa/responsável."
+            )
+            
+            phone_col = st.selectbox(
+                "Coluna do Número de Telefone:",
+                column_names,
+                index=default_phone_index,
+                help="Selecione a coluna que contém o número de telefone (com ou sem formatação)."
             )
 
-            if path == 'PATH A: Geração de VCF (Agenda Pessoal)':
-                # --- PATH A: VCF EXECUTION ---
-                st.subheader("Geração de VCF (vCard)")
-                st.markdown("Gera um único arquivo `.vcf` pronto para importação em qualquer agenda de contatos (Google/iOS).")
+            # 3. Pré-visualização e Validação dos Números (Novo Módulo de Feedback)
+            st.subheader("3. Visualização e Validação dos Números")
+            
+            # Aplica a validação e padronização para a pré-visualização (máx 100 linhas)
+            preview_df = df.head(100).copy()
+            
+            # Usa a função de padronização para criar as colunas de status
+            validation_results = [clean_and_standardize_phone(n) for n in preview_df[phone_col]]
+            
+            preview_df['Número Limpo Formatado'] = [r['formatted_number'] for r in validation_results]
+            preview_df['Status Validação'] = ['✅ Válido' if r['api_number'] else '❌ FALHA' for r in validation_results]
+            preview_df['Detalhe do Erro'] = [r['error_detail'] if r['error_detail'] else 'OK' for r in validation_results]
+            
+            # Exibe a pré-visualização (apenas colunas importantes)
+            st.dataframe(
+                preview_df[[name_col, phone_col, 'Número Limpo Formatado', 'Status Validação', 'Detalhe do Erro']],
+                use_container_width=True
+            )
+            
+            # --- 4. Escolha do Caminho ---
+            st.subheader("4. Escolha o Caminho de Saída")
+            
+            path = st.radio(
+                "Selecione a Ação:",
+                ('PATH A: Gerar Arquivo VCF (Importar Contatos)', 'PATH B: Enviar Mensagem via WhatsApp Cloud API'),
+                key='path_choice'
+            )
+
+            # --- PATH A: VCF Generation ---
+            if path == 'PATH A: Gerar Arquivo VCF (Importar Contatos)':
+                st.info("O VCF só incluirá contatos que passaram na validação (11 ou 13 dígitos, com '9' e '55' no lugar certo).")
                 
-                if st.button("📥 Gerar e Baixar Arquivo VCF", key="btn_vcf_gen"):
-                    with st.spinner('Processando e limpando dados para VCF...'):
-                        vcf_content = generate_vcf_content(
-                            df, 
-                            st.session_state['name_col'], 
-                            st.session_state['phone_col'], 
-                            st.session_state['default_cc']
-                        )
+                # Gera o conteúdo VCF
+                vcf_content = generate_vcf_content(df, name_col, phone_col)
+                
+                if vcf_content.strip():
+                    # Botão de download do Streamlit
+                    st.download_button(
+                        label="🚀 Baixar Arquivo VCF (.vcf)",
+                        data=vcf_content.encode('utf-8'),
+                        file_name=f"contatos_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.vcf",
+                        mime="text/vcard",
+                        help="Clique para baixar o arquivo VCF pronto para importação."
+                    )
+                    st.success(f"VCF gerado. Contém {len(vcf_content.split('END:VCARD')) - 1} contatos válidos.")
+                else:
+                    st.warning("Nenhum contato válido encontrado para gerar o VCF.")
+
+            # --- PATH B: WhatsApp Cloud API ---
+            elif path == 'PATH B: Enviar Mensagem via WhatsApp Cloud API':
+                st.warning("Requer credenciais da Meta. Use apenas templates previamente aprovados.")
+                
+                # Campos de entrada para as credenciais
+                with st.expander("Configurações da API", expanded=True):
+                    access_token = st.text_input("Token de Acesso da Meta (Começa com EAAB...)", type="password")
+                    phone_number_id = st.text_input("ID do Número de Telefone (da conta do WhatsApp Business)")
+                    template_name = st.text_input("Nome do Template Aprovado (Ex: 'bem_vindo')")
+
+                # Botão de Execução
+                if st.button("🔴 Iniciar Envio de Mensagens via API (Alto Risco)", disabled=not (access_token and phone_number_id and template_name)):
                     
-                    if vcf_content:
-                        st.download_button(
-                            label="✅ Clique para Baixar o VCF",
-                            data=vcf_content.encode('utf-8'),
-                            file_name=f"contatos_import_{int(time.time())}.vcf",
-                            mime="text/vcard"
-                        )
-                        st.success(f"VCF gerado com sucesso! Total de {len(vcf_content.split('END:VCARD')) - 1} contatos válidos.")
-                    else:
-                        st.error("Nenhum contato válido foi encontrado após a limpeza dos números. Verifique o Código de País e DDD.")
-
-            elif path == 'PATH B: Integração WhatsApp Cloud API (Empresarial)':
-                # --- PATH B: API CREDENTIALS ---
-                st.subheader("Configuração do WhatsApp Cloud API")
-                st.warning("⚠️ **Atenção:** Certifique-se de que seu template está APROVADO.")
-                
-                # Campos dinâmicos para credenciais
-                api_token = st.text_input("Access Token da Meta:", type="password", key='api_token_input')
-                phone_id = st.text_input("Phone Number ID (ID do Telefone no Meta):", key='phone_id_input')
-                template_name = st.text_input("Nome do Template Aprovado (Ex: 'ola_novo_cliente'):", key='template_name_input')
-                
-                st.info("Atenção: A lógica assume que o primeiro placeholder do seu template é o nome do contato.")
-
-                if st.button("🚀 Iniciar Envio de Mensagens via API", key="btn_api_send"):
-                    if not all([api_token, phone_id, template_name]):
-                        st.error("Por favor, preencha todos os campos de credenciais da API.")
+                    if not st.checkbox("Confirmo que o template está aprovado e entendo os limites de taxa da API.", key='confirm_api'):
+                        st.error("Você deve confirmar a responsabilidade pelo uso da API.")
                         return
 
-                    st.markdown("---")
-                    st.header("Registro de Execução da API")
+                    st.info("Iniciando envio... Isso pode demorar, não feche o navegador.")
                     
-                    results = []
-                    status_log = st.empty()
-                    
-                    total_rows = len(df)
-                    success_count = 0
-                    failure_count = 0
-                    
-                    # Cria um DataFrame temporário para o relatório e o exibe para updates em tempo real
-                    results_df = pd.DataFrame(columns=["Nome", "Número Original", "Status", "Detalhe da Falha"])
-                    results_container = st.empty()
-                    results_container.dataframe(results_df)
-
-                    for index, row in df.iterrows():
-                        contact_name = str(row.get(st.session_state['name_col'], 'Contato Desconhecido'))
-                        original_phone = str(row.get(st.session_state['phone_col'], ''))
+                    # Executa a função de envio
+                    try:
+                        report_df = send_whatsapp_template_message(
+                            df, name_col, phone_col, access_token, phone_number_id, template_name
+                        )
                         
-                        cleaned_phone = clean_and_standardize_phone(original_phone, st.session_state['default_cc'])
+                        st.subheader("Relatório de Execução da API")
                         
-                        current_result = {
-                            "Nome": contact_name,
-                            "Número Original": original_phone,
-                            "Status": "...",
-                            "Detalhe da Falha": ""
-                        }
-
-                        if not cleaned_phone:
-                            failure_count += 1
-                            current_result.update({"Status": "❌ Falha", "Detalhe da Falha": "Número Limpo/Formatado Inválido."})
-                        else:
-                            # Simulação de atraso (boas práticas de API)
-                            time.sleep(0.5) 
-                            
-                            # Chama a função da API
-                            api_response = send_whatsapp_template_message(
-                                phone_id,
-                                api_token,
-                                cleaned_phone,
-                                template_name,
-                                contact_name
-                            )
-
-                            if api_response['status'] == 'Success':
-                                success_count += 1
-                                current_result.update({
-                                    "Status": "✅ Sucesso", 
-                                    "Detalhe da Falha": f"ID da Mensagem: {api_response['data'].get('messages', [{}])[0].get('id', 'N/A')}"
-                                })
-                            else:
-                                failure_count += 1
-                                current_result.update({"Status": "❌ Falha", "Detalhe da Falha": api_response['detail']})
-
-                        # Atualiza o DataFrame do relatório
-                        results_df.loc[index] = current_result
-                        results_container.dataframe(results_df.style.apply(lambda s: ['background-color: #ffcccc' if 'Falha' in v else '' for v in s], subset=['Status', 'Detalhe da Falha']))
+                        total_sent = len(report_df)
+                        success_count = (report_df['Status'] == 'SUCESSO').sum()
+                        fail_count = (report_df['Status'] == 'FALHA').sum()
                         
-                        # Atualiza o log de progresso
-                        status_log.write(f"Processando contato {index+1}/{total_rows}... (Sucessos: {success_count}, Falhas: {failure_count})")
-
-                    # Relatório Final
-                    st.markdown("---")
-                    st.success(f"Processo Concluído! Total de Contatos: {total_rows}")
-                    st.metric(label="Mensagens Enviadas com Sucesso", value=success_count)
-                    st.metric(label="Falhas no Envio", value=failure_count)
+                        st.metric("Total de Contatos Processados", total_sent)
+                        st.metric("Mensagens Enviadas com Sucesso", success_count)
+                        st.metric("Falhas (Erros ou Números Inválidos)", fail_count)
+                        
+                        st.dataframe(report_df, use_container_width=True)
+                        st.balloons()
                     
-                    status_log.empty() # Remove o status de processamento
+                    except Exception as e:
+                        st.error(f"Ocorreu um erro crítico durante o processamento da API: {e}")
 
         except Exception as e:
-            st.error(f"Ocorreu um erro no processamento do arquivo: {e}")
-            st.warning("Verifique se as colunas e o formato do arquivo estão corretos. Erro técnico: " + str(e))
-
-    else:
-        st.info("Aguardando o upload do seu arquivo Excel ou CSV.")
+            st.error(f"Erro ao processar o arquivo. Verifique se o formato está correto: {e}")
 
 if __name__ == '__main__':
     main()
