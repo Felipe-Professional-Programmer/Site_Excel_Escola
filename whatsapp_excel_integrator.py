@@ -11,11 +11,11 @@ from typing import Optional, Dict, Any, Tuple
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # 1. Credenciais para Detecção de Colunas (DeepSeek R1T2) - CHAVE ATUALIZADA
-OPENROUTER_DEEPSEEK_KEY = "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"
+OPENROUTER_DEEPSEEK_KEY = "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"
 DEEPSEEK_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 
 # 2. Credenciais para Chatbot Conversacional e Explicação de Defeito (Gemini 2.0 Flash) - CHAVE ATUALIZADA
-OPENROUTER_GEMINI_KEY = "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"
+OPENROUTER_GEMINI_KEY = "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"
 GEMINI_MODEL = "google/gemini-2.0-flash-exp:free"
 
 # A latência fixa foi removida conforme a solicitação do usuário.
@@ -117,12 +117,20 @@ def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=
                     time.sleep(CRITICAL_RETRY_DELAY_SECONDS) 
                     continue
                 else:
-                    raise Exception("Falha persistente na API.")
+                    # Retorna uma explicação local robusta em caso de falha persistente
+                    return (f"Falha ao consultar a AI ({reason}). O formato brasileiro requer 13 dígitos (55 + DDD + 9 dígitos), "
+                            f"e seu número não se encaixou nos padrões de correção automática.")
             
             return text
             
         except Exception:
-            # Retorna uma explicação local robusta em caso de falha da API
+            # Captura exceções inesperadas e também aplica a regra do delay antes de desistir
+            if attempt < max_retries - 1:
+                st.warning(f"Erro inesperado na chamada da AI. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
+                time.sleep(CRITICAL_RETRY_DELAY_SECONDS) 
+                continue
+            
+            # Retorna uma explicação local robusta em caso de falha persistente
             return (f"Falha ao consultar a AI ({reason}). O formato brasileiro requer 13 dígitos (55 + DDD + 9 dígitos), "
                     f"e seu número não se encaixou nos padrões de correção automática.")
             
