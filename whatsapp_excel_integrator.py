@@ -7,24 +7,12 @@ import time
 from io import BytesIO
 from typing import Optional, Dict, Any, Tuple
 
-# --- CONSTANTES DE AI REMOVIDAS ---
+# --- CONSTANTES DE MAPEAMENTO FIXO (REMOVIDAS, AGORA SÓ HINTS) ---
 # Nenhuma chave ou constante de AI é necessária, pois o mapeamento é fixo.
-# ----------------------------------
-
-# --- CONSTANTES DE MAPEAMENTO FIXO (NOVO REQUISITO) ---
-# O aplicativo agora espera que a planilha tenha EXATAMENTE estas colunas.
-FIXED_COLUMNS_MAP = {
-    "turma_name_col": "Turma",
-    "student_name_col": "Aluno",
-    "phone_col": "Telefone",
-    "responsible_name_col": "Responsável",
-}
 # ----------------------------------------------------
 
 
 # --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO (Simplificadas) ---
-
-# Funções de AI para explicação e detecção foram removidas.
 
 def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -133,7 +121,7 @@ def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_na
     vcf_blocks = []
     
     for index, row in df.iterrows():
-        # Mapeamento fixo conforme as colunas esperadas
+        # Mapeamento dinâmico: as variáveis de coluna agora contêm o nome escolhido pelo usuário.
         responsible_name = str(row.get(responsible_name_col, '')).strip()
         student_name = str(row.get(student_name_col, '')).strip()
         turma_name = str(row.get(turma_name_col, '')).strip() 
@@ -178,7 +166,7 @@ END:VCARD"""
                 "Nome da Turma": turma_name, 
                 "Telefone": original_phone, 
                 "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido.",
-                "Explicação_Manual": "O número não pôde ser padronizado. Verifique se ele contém o DDD e o 9º dígito se for celular." # Mensagem manual
+                "Explicação_Manual": "O número não pôde ser padronizado. Verifique se ele contém o DDD e o 9º dígito se for celular."
             }
             # Combina os metadados com todos os dados da linha original
             failed_contacts.append(failed_entry | row.to_dict()) 
@@ -244,6 +232,21 @@ def send_whatsapp_template_message(
 
 # --- II. ESTRUTURA E INTERFACE DO STREAMLIT ---
 
+# Função auxiliar para sugerir a coluna inicial (se houver correspondência)
+def find_initial_column(columns, hint):
+    """Tenta encontrar uma coluna que corresponda ao hint ('Turma', 'Aluno', etc.) para pre-seleção."""
+    # Prioriza correspondência exata, depois correspondência sem espaços (normalizada)
+    if hint in columns:
+        return hint
+    
+    normalized_hint = hint.strip().lower()
+    for col in columns:
+        if col.strip().lower() == normalized_hint:
+             return col
+    # Se não encontrar, retorna a primeira coluna como fallback
+    return columns[0] if columns else None
+
+
 def main():
     # Remove a interface do chat AI
     
@@ -253,14 +256,13 @@ def main():
         initial_sidebar_state="collapsed" 
     )
     
-    st.title("🚀 Conversor Excel/CSV para Contatos/WhatsApp (Mapeamento Fixo)")
+    st.title("🚀 Conversor Excel/CSV para Contatos/WhatsApp (Mapeamento Manual)")
     st.markdown("Automatize a integração de contatos da sua planilha para o celular (VCF) ou para o WhatsApp Business Cloud API.")
     st.markdown("---")
 
     # --- Step 1: Upload & Map ---
     
     st.header("1. Upload e Mapeamento de Dados")
-    st.markdown("⚠️ **Atenção:** Este aplicativo espera que seu arquivo Excel/CSV contenha as colunas **Turma**, **Aluno**, **Telefone** e **Responsável** com estes nomes exatos.")
     
     uploaded_file = st.file_uploader("Selecione seu arquivo (.xlsx, .xls ou .csv)", type=["xlsx", "xls", "csv"])
 
@@ -274,34 +276,72 @@ def main():
                 # Usa BytesIO para garantir a compatibilidade com Streamlit e pandas
                 df = pd.read_excel(uploaded_file, engine='openpyxl')
             
+            # Normaliza os nomes das colunas (remove espaços em branco)
+            # Isso garante que a exibição e a seleção sejam limpas, mas as chaves do DataFrame permanecem as originais.
+            df.columns = df.columns.str.strip() 
+            
             st.session_state['df'] = df
             columns = df.columns.tolist()
             
+            if not columns:
+                st.error("❌ O arquivo parece estar vazio ou sem cabeçalhos.")
+                return
+
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
             
-            # --- Mapeamento Fixo e Validação ---
-            
-            # Mapeia diretamente para os nomes fixos
-            responsible_name_col = FIXED_COLUMNS_MAP['responsible_name_col']
-            student_name_col = FIXED_COLUMNS_MAP['student_name_col']
-            phone_col = FIXED_COLUMNS_MAP['phone_col']
-            turma_name_col = FIXED_COLUMNS_MAP['turma_name_col']
-            
-            required_cols = [responsible_name_col, student_name_col, phone_col, turma_name_col]
-            missing_cols = [col for col in required_cols if col not in columns]
+            # --- NOVO: Seleção Manual de Colunas ---
+            st.subheader("Selecione as Colunas Correspondentes:")
 
-            if missing_cols:
-                st.error(f"❌ Erro de Mapeamento: As seguintes colunas obrigatórias não foram encontradas em seu arquivo: **{', '.join(missing_cols)}**.")
+            # Cria a lista de opções, adicionando uma opção vazia se a lista não estiver vazia
+            column_options = columns
+
+            # Mapeamento dos campos necessários e seus hints para pre-seleção
+            fields_to_map = {
+                "responsible_name_col": "Responsável",
+                "student_name_col": "Aluno",
+                "turma_name_col": "Turma",
+                "phone_col": "Telefone",
+            }
+            
+            mapped_cols = {}
+            cols = st.columns(2)
+            
+            # Cria os selectboxes
+            for i, (key, hint) in enumerate(fields_to_map.items()):
+                # Tenta encontrar um valor inicial sugerido
+                default_selection = find_initial_column(columns, hint)
+                
+                # Se encontrou um valor, usa-o como índice padrão
+                default_index = column_options.index(default_selection) if default_selection else 0
+                
+                with cols[i % 2]:
+                    # st.selectbox para seleção manual
+                    mapped_cols[key] = st.selectbox(
+                        f"Campo: **{hint}**",
+                        options=column_options,
+                        index=default_index,
+                        key=f'col_select_{key}',
+                        help=f"Selecione a coluna da sua planilha que representa o campo '{hint}'."
+                    )
+
+            # Armazenamento das colunas escolhidas
+            responsible_name_col = mapped_cols['responsible_name_col']
+            student_name_col = mapped_cols['student_name_col']
+            phone_col = mapped_cols['phone_col']
+            turma_name_col = mapped_cols['turma_name_col']
+            
+            # Validação: Garante que o usuário selecionou colunas válidas
+            if not all([responsible_name_col, student_name_col, phone_col, turma_name_col]):
+                st.warning("⚠️ Por favor, selecione uma coluna válida para cada campo.")
                 return
-            
-            st.success("✅ Todas as colunas necessárias foram encontradas.")
+
+            st.success("✅ Mapeamento de colunas concluído com sucesso!")
 
             # =========================================================================
-            # Mapeamento de Colunas FIXO (Resultado da AI REMOVIDO)
+            # Armazenamento e Exibição das Colunas
             # =========================================================================
             
-            # Exibe as colunas fixas (Somente para informação do usuário)
-            st.subheader("Colunas Mapeadas Automaticamente (Nomes Fixos):")
+            st.subheader("Colunas Selecionadas:")
             col_info1, col_info2 = st.columns(2)
             with col_info1:
                 st.markdown(f"**Responsável:** `{responsible_name_col}`")
@@ -311,7 +351,7 @@ def main():
                 st.markdown(f"**Telefone:** `{phone_col}`")
 
             
-            # Armazenamento das colunas fixas na session_state
+            # Armazenamento das colunas na session_state
             st.session_state['responsible_name_col'] = responsible_name_col
             st.session_state['student_name_col'] = student_name_col
             st.session_state['phone_col'] = phone_col
