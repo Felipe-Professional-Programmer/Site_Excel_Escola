@@ -10,15 +10,16 @@ from typing import Optional, Dict, Any, Tuple
 # --- CONSTANTES DE AI (ATUALIZADAS COM CHAVES FORNECIDAS) ---
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# 1. Credenciais para Detecção de Colunas (DeepSeek R1T2)
-OPENROUTER_DEEPSEEK_KEY = "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"
+# 1. Credenciais para Detecção de Colunas (DeepSeek R1T2) - CHAVE ATUALIZADA
+OPENROUTER_DEEPSEEK_KEY = "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"
 DEEPSEEK_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 
-# 2. Credenciais para Chatbot Conversacional e Explicação de Defeito (Gemini 2.0 Flash)
-OPENROUTER_GEMINI_KEY = "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"
+# 2. Credenciais para Chatbot Conversacional e Explicação de Defeito (Gemini 2.0 Flash) - CHAVE ATUALIZADA
+OPENROUTER_GEMINI_KEY = "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"
 GEMINI_MODEL = "google/gemini-2.0-flash-exp:free"
 
 # A latência fixa foi removida conforme a solicitação do usuário.
+CRITICAL_RETRY_DELAY_SECONDS = 60 # 1 minuto, para qualquer tipo de falha
 # -----------------------------------------------------------
 
 # --- CÓDIGO DA APLICAÇÃO PARA CONTEXTO DO CHATBOT ---
@@ -39,7 +40,8 @@ APP_CODE_CONTEXT = """
 def openrouter_chat_api(messages: list, api_key: str, model: str, system_prompt: str) -> str:
     """
     Chama a API OpenRouter com o modelo e a chave especificados.
-    A chamada é síncrona (requests.post é bloqueante).
+    A chamada é síncrona (requests.post é bloqueante), garantindo que
+    não haverá múltiplas solicitações simultâneas.
     """
     payload = {
         "model": model,
@@ -70,13 +72,11 @@ def openrouter_chat_api(messages: list, api_key: str, model: str, system_prompt:
         
         text = api_result['choices'][0]['message']['content'].strip()
         
-        # O módulo de latência fixa (2.15s) foi removido conforme a solicitação
-        # do usuário para não impor um tempo fixo. A chamada é síncrona,
-        # garantindo que o agente só seja "chamado" quando o anterior responder.
-        
         return text
         
     except requests.exceptions.RequestException as e:
+        # Se ocorrer uma RequestException (falha de conexão, timeout ou HTTP 4xx/5xx),
+        # a função chamadora lidará com o retry/delay.
         return f"Falha ao consultar a AI via OpenRouter. Erro: {e}"
     except (KeyError, IndexError):
         return "Erro ao processar a resposta da AI."
@@ -99,7 +99,7 @@ def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=
 
     messages = [{"role": "user", "content": user_query}]
     
-    # Simulação de Loop de Retry com Backoff Exponencial
+    # Simulação de Loop de Retry com delay fixo de 1 minuto em caso de falha
     for attempt in range(max_retries):
         try:
             # Reutiliza a função genérica para chamar o Gemini via OpenRouter
@@ -110,10 +110,11 @@ def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=
                 system_prompt
             )
             
-            # Se a resposta for um erro de falha, tenta novamente
+            # Se a resposta for um erro de falha, aciona o delay
             if text.startswith("Falha ao consultar a AI"):
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt) # Atraso exponencial antes do retry
+                    st.warning(f"Falha na AI. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
+                    time.sleep(CRITICAL_RETRY_DELAY_SECONDS) 
                     continue
                 else:
                     raise Exception("Falha persistente na API.")
@@ -130,6 +131,7 @@ def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=
 def detect_columns_with_ai(columns: list, sample_row: Dict[str, Any], max_retries=3) -> Dict[str, str]:
     """
     Chama a AI DeepSeek R1T2 (via OpenRouter) para mapear os campos semânticos.
+    Aplica delay fixo de 1 minuto em caso de qualquer erro.
     """
     
     required_fields = ["Nome do Responsável", "Nome do Aluno", "Nome da Turma", "Telefone"]
@@ -192,7 +194,7 @@ Com base nas COLUNAS, identifique as chaves e retorne APENAS o JSON.
         "X-Title": "AI Excel-to-WhatsApp Sender"
     }
 
-    # Módulo 37: Gerenciamento de Dependências (Retry Loop)
+    # Módulo 37: Gerenciamento de Dependências (Retry Loop) com Delay Fixo de 1 Minuto
     for attempt in range(max_retries):
         try:
             response = requests.post(
@@ -224,7 +226,9 @@ Com base nas COLUNAS, identifique as chaves e retorne APENAS o JSON.
 
         except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # Backoff exponencial
+                # Delay de 1 minuto (60s) conforme solicitação do usuário para QUALQUER falha
+                st.warning(f"Falha na Detecção Automática de Colunas. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
+                time.sleep(CRITICAL_RETRY_DELAY_SECONDS)
                 continue
             else:
                 error_message = f"Falha na detecção automática de colunas por AI (Tentativas: {max_retries}). Erro: {e}"
