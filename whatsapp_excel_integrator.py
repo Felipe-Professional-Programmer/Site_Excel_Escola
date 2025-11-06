@@ -2,9 +2,18 @@ import streamlit as st
 import pandas as pd
 import requests
 import re
+import json # Adicionado para manipulação de JSON da API
 from io import BytesIO
 import time
 from typing import Optional, Dict, Any, Tuple
+
+# --- CONSTANTES DE AI ---
+# CHAVE FORNECIDA PELO USUÁRIO (OpenRouter)
+OPENROUTER_API_KEY = "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"
+OPENROUTER_MODEL = "tngtech/deepseek-r1t2-chimera:free"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# -------------------------
+
 
 # --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO ---
 
@@ -61,6 +70,115 @@ def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=
             return "Erro desconhecido ao processar a resposta da AI."
             
     return "Erro desconhecido."
+
+def detect_columns_with_ai(columns: list, sample_row: Dict[str, Any], max_retries=3) -> Dict[str, str]:
+    """
+    Calls the OpenRouter AI to semantically map required fields to column headers.
+    Returns a dictionary of mapped column names or raises an exception on failure.
+    """
+    # Módulo 40: Deployment Wrapper - Prompt Estruturado para detecção de colunas
+    
+    required_fields = ["Nome do Responsável", "Nome do Aluno", "Nome da Turma", "Telefone"]
+    
+    # Prepara a matriz textual da linha de amostra para a IA
+    sample_text = ', '.join(map(str, sample_row.values()))
+    
+    ai_prompt = f"""
+# DEEP SYSTEM PROMPT: ANALISTA DE DADOS E MAPEAMENTO DE COLUNAS
+Você é um Analista de Dados de Alto Nível com foco em mapeamento de colunas para campos semânticos.
+Sua única tarefa é mapear as colunas fornecidas abaixo para os QUATRO campos semânticos requeridos.
+Você DEVE retornar APENAS um objeto JSON válido, sem texto explicativo, introdução, ou formatação Markdown (como ```json).
+
+# CAMPOS SEMÂNTICOS REQUERIDOS:
+1. responsible_name_col: Nome EXATO da coluna que representa o Nome do Responsável ou Contato Principal.
+2. student_name_col: Nome EXATO da coluna que representa o Nome do Aluno.
+3. turma_name_col: Nome EXATO da coluna que representa a Turma ou Classe.
+4. phone_col: Nome EXATO da coluna que representa o Telefone ou Número de Contato.
+
+Se você não conseguir identificar uma coluna, use o valor 'NÃO ENCONTRADO' para aquela chave.
+O seu trabalho se resume a retornar o JSON final.
+
+# DADOS DA TABELA EXCEL (MATRIZ UNIDIMENSIONAL DE TEXTO PARA CONTEXTO)
+COLUNAS (Títulos):
+[{', '.join(columns)}]
+
+LINHA DE AMOSTRA (Valores em ordem):
+[{sample_text}]
+
+Com base nas COLUNAS, identifique as chaves e retorne APENAS o JSON.
+"""
+
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": ai_prompt
+            }
+        ],
+        "response_mime_type": "application/json",
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "responsible_name_col": {"type": "string"},
+                "student_name_col": {"type": "string"},
+                "turma_name_col": {"type": "string"},
+                "phone_col": {"type": "string"}
+            }
+        }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "[https://canvas.google.com](https://canvas.google.com)", 
+        "X-Title": "AI Excel-to-WhatsApp Sender"
+    }
+
+    # Módulo 37: Gerenciamento de Dependências (Retry Loop)
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                url=OPENROUTER_URL,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=30 
+            )
+            response.raise_for_status() 
+            api_result = response.json()
+            
+            ai_response_text = api_result['choices'][0]['message']['content'].strip()
+            # Módulo 35: Output Polisher - Limpa e tenta parsear a string JSON da IA
+            clean_json_text = ai_response_text.replace('```json', '').replace('```', '').strip()
+            final_result = json.loads(clean_json_text)
+            
+            # Módulo 14: Verificação Dedutiva - Valida a estrutura JSON
+            required_keys = ['responsible_name_col', 'student_name_col', 'turma_name_col', 'phone_col']
+            if not all(key in final_result for key in required_keys):
+                 raise ValueError(f"AI returned incomplete mapping. Missing keys.")
+            
+            # Verifica se os nomes mapeados realmente existem nas colunas fornecidas
+            for key, col_name in final_result.items():
+                if col_name and col_name != 'NÃO ENCONTRADO' and col_name not in columns:
+                    st.warning(f"Atenção: A IA mapeou '{col_name}' para {key}, mas essa coluna não foi encontrada no seu arquivo. Retornando 'NÃO ENCONTRADO' para segurança.")
+                    final_result[key] = 'NÃO ENCONTRADO'
+                    
+            return final_result
+
+        except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+                continue
+            else:
+                error_message = f"Falha na detecção automática de colunas por AI (Tentativas: {max_retries}). Erro: {e}"
+                if 'response' in locals() and response.status_code == 401:
+                    error_message += " (Token de API Inválido ou Expirado)"
+                elif 'response' in locals():
+                    error_message += f" (Status HTTP: {response.status_code})"
+                raise Exception(error_message)
+                
+    # Fallback return (should be unreachable)
+    return {}
 
 
 # Módulo de Limpeza de Número de Telefone (CRITICAL)
@@ -246,7 +364,7 @@ def send_whatsapp_template_message(
     """Envia uma mensagem de template via WhatsApp Cloud API."""
     
     # 1. Constrói o URL da API
-    url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
+    url = f"[https://graph.facebook.com/v19.0/](https://graph.facebook.com/v19.0/){phone_number_id}/messages"
     
     # 2. Constrói o payload da mensagem (assumindo o placeholder {{1}} para o nome)
     payload = {
@@ -324,39 +442,63 @@ def main():
             
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
             
-            # =========================================================================
-            # Mapeamento de Colunas FIXO (Sem SelectBox)
-            # ATENÇÃO: Ajuste estes nomes para corresponder exatamente às suas colunas do Excel.
-            # =========================================================================
-            fixed_responsible_name_col = "Nome_Responsavel" # NOME EXATO DA COLUNA NO EXCEL
-            fixed_student_name_col = "Nome_Aluno"           # NOME EXATO DA COLUNA NO EXCEL
-            fixed_phone_col = "Telefone"                     # NOME EXATO DA COLUNA NO EXCEL
-            fixed_turma_name_col = "Nome_Turma"              # NOVO: NOME EXATO DA COLUNA NO EXCEL
-            
-            # Garante que as colunas fixas existem antes de prosseguir
-            required_cols = [fixed_responsible_name_col, fixed_student_name_col, fixed_phone_col, fixed_turma_name_col]
-            missing_cols = [col for col in required_cols if col not in columns]
-            
-            if missing_cols:
-                st.error(f"As seguintes colunas necessárias não foram encontradas no arquivo: {', '.join(missing_cols)}. Por favor, verifique os nomes definidos no código.")
-                return
+            # --- NOVO: Chamada da AI para Mapeamento de Colunas ---
+            try:
+                # Módulo 16: Geração de Meta-Prompts
+                # Módulo 26: Construtor de Respostas
+                sample_row = df.iloc[0].to_dict()
+                
+                with st.spinner("🤖 Analisando cabeçalhos com IA para mapeamento automático de colunas..."):
+                    mapped_cols = detect_columns_with_ai(columns, sample_row)
+                    
+                # Extrai os resultados mapeados
+                responsible_name_col = mapped_cols.get('responsible_name_col')
+                student_name_col = mapped_cols.get('student_name_col')
+                phone_col = mapped_cols.get('phone_col')
+                turma_name_col = mapped_cols.get('turma_name_col')
+                
+                # Verifica se a AI conseguiu identificar todas as colunas (ou se retornou 'NÃO ENCONTRADO')
+                required_fields_map = {
+                    "Nome do Responsável": responsible_name_col,
+                    "Nome do Aluno": student_name_col,
+                    "Telefone": phone_col,
+                    "Nome da Turma": turma_name_col
+                }
+                
+                missing_or_unfound_cols = {friendly_name: col_name for friendly_name, col_name in required_fields_map.items() if col_name is None or col_name == 'NÃO ENCONTRADO' or col_name not in columns}
+                
+                if missing_or_unfound_cols:
+                    unfound_names = ", ".join(missing_or_unfound_cols.keys())
+                    st.error(f"❌ A IA não conseguiu mapear automaticamente as seguintes colunas: {unfound_names}. Por favor, verifique se os nomes das colunas no seu arquivo são claros.")
+                    return
+                
+                # Se o mapeamento foi bem-sucedido
+                st.success("✅ Mapeamento de colunas concluído com sucesso via IA!")
 
+            except Exception as e:
+                st.error(f"❌ Erro Crítico na Detecção Automática por IA. O aplicativo não pode prosseguir. Detalhes: {e}")
+                return
+            
+            # =========================================================================
+            # Mapeamento de Colunas FIXO (Resultado da AI)
+            # =========================================================================
+            
             # Exibe as colunas fixas (Somente para informação do usuário)
             st.subheader("Colunas Mapeadas Automaticamente:")
             col_info1, col_info2 = st.columns(2)
             with col_info1:
-                st.markdown(f"**Nome do Responsável:** `{fixed_responsible_name_col}`")
-                st.markdown(f"**Nome do Aluno:** `{fixed_student_name_col}`")
+                st.markdown(f"**Nome do Responsável:** `{responsible_name_col}`")
+                st.markdown(f"**Nome do Aluno:** `{student_name_col}`")
             with col_info2:
-                st.markdown(f"**Nome da Turma:** `{fixed_turma_name_col}`")
-                st.markdown(f"**Número de Telefone:** `{fixed_phone_col}`")
+                st.markdown(f"**Nome da Turma:** `{turma_name_col}`")
+                st.markdown(f"**Número de Telefone:** `{phone_col}`")
 
             
             # Armazenamento das colunas fixas na session_state
-            st.session_state['responsible_name_col'] = fixed_responsible_name_col
-            st.session_state['student_name_col'] = fixed_student_name_col
-            st.session_state['phone_col'] = fixed_phone_col
-            st.session_state['turma_name_col'] = fixed_turma_name_col # Novo
+            st.session_state['responsible_name_col'] = responsible_name_col
+            st.session_state['student_name_col'] = student_name_col
+            st.session_state['phone_col'] = phone_col
+            st.session_state['turma_name_col'] = turma_name_col 
             # =========================================================================
             
             # Coluna para DDD/CC (mantida como input para flexibilidade do usuário)
@@ -451,8 +593,9 @@ def main():
                             "Índice_Linha_Original": st.column_config.NumberColumn("Linha"),
                             "Nome do Responsável": st.column_config.TextColumn("Responsável"),
                             "Nome do Aluno": st.column_config.TextColumn("Aluno"),
-                            "Nome da Turma": st.column_config.TextColumn("Turma"), # Novo
-                            "Telefone": st.column_config.TextColumn("Telefone"), # Novo
+                            "Nome da Turma": st.column_config.TextColumn("Turma"), 
+                            "Telefone": st.column_config.TextColumn("Telefone"), 
+                            # Configurações para estender o texto
                             "Motivo_da_Falha": st.column_config.Column(
                                 "Motivo da Falha",
                                 width="large",
