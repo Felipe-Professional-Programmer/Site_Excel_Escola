@@ -12,7 +12,8 @@ from typing import Optional, Dict, Any
 def clean_and_standardize_phone(number: str, default_country_code: str) -> Optional[str]:
     """
     Limpa o número de telefone, removendo caracteres não-dígitos e
-    garantindo o formato E.164 (código do país + DDD + Número).
+    garantindo o formato E.164 (código do país + DDD + Número),
+    com lógica avançada de inferência de prefixos (55 + 31).
     
     A lógica foca no Brasil (55) mas é ajustável via `default_country_code`.
     """
@@ -22,30 +23,56 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Optio
     # 1. Converte para string e remove todos os caracteres não-dígitos
     cleaned_number = re.sub(r'\D', '', str(number))
     
-    country_code_only = default_country_code[:2]
+    # ----------------------------------------------------------------------
+    # LÓGICA AVANÇADA DE PADRONIZAÇÃO (Baseado em 55 e 31)
+    # ----------------------------------------------------------------------
     
-    # 2. Se o número já começa com o código do país, assume que está completo.
-    if cleaned_number.startswith(country_code_only) and len(cleaned_number) >= 10:
-        return cleaned_number
+    # Assume que o CC é os 2 primeiros dígitos e o DD é o restante da string de configuração
+    CC = default_country_code[:2] if len(default_country_code) >= 2 else "55" 
+    DD = default_country_code[2:4] if len(default_country_code) >= 4 else "31"
     
-    # 3. Trata números que não têm prefixo internacional.
+    # Verifica se o número já tem o CC (Ex: 55)
+    has_cc = cleaned_number.startswith(CC)
     
-    # Se o número tiver 10 ou 11 dígitos, assume-se que o DDD está incluso.
-    if len(cleaned_number) in [10, 11]:
-        return country_code_only + cleaned_number
-    
-    # Se o número tiver 8 ou 9 dígitos (apenas local), assume-se que o DDD está faltando
-    # e usa o DDD fornecido no 'default_country_code' (ex: '11' de '5511').
-    if len(cleaned_number) in [8, 9]:
-        ddd = default_country_code[2:] 
-        if ddd:
-            return country_code_only + ddd + cleaned_number
+    phone_length = len(cleaned_number)
+
+    # NOVO REQUISITO: Descartar números com exatamente 10 dígitos (Ambíguos/Incompletos)
+    if phone_length == 10:
+        return None
+
+    # Caso 1: Número Local (8 ou 9 dígitos). Faltam CC e DD.
+    if phone_length in [8, 9]:
+        # Completa com o CC e DD padrão (Ex: 55 + 31 + 987654321)
+        return CC + DD + cleaned_number
+
+    # Caso 2: Número com DDD (11 dígitos). Falta o CC.
+    # Ex: 31987654321
+    if phone_length == 11:
+        # Verifica se começa com o DDD configurado (Ex: 31)
+        if cleaned_number.startswith(DD):
+            # Completa com o CC (Ex: 55 + 31987654321)
+            return CC + cleaned_number
         else:
-            # Caso o usuário tenha fornecido apenas "55" e o número seja local (8/9 dígitos)
-            return None # Não é possível inferir o DDD
-            
-    # Se a limpeza falhar ou o número for muito curto/estranho, retorna None
-    return None
+            # Não começa com o DDD configurado, mas tem 11 dígitos.
+            # Assumimos que o CC está faltando, completamos para ser seguro.
+            return CC + cleaned_number
+
+    # Caso 3: Número Internacional Completo (12 ou 13 dígitos).
+    # Ex: 5531987654321 (13 digitos) ou 551198765432 (12 digitos, fixo antigo)
+    if phone_length in [12, 13]:
+        # Se já começa com o CC (55), está correto.
+        if has_cc:
+            return cleaned_number
+        # Se não tem o CC, e tem 12 ou 13, assumimos que o CC está faltando.
+        return CC + cleaned_number
+        
+    # Caso 4: Outros tamanhos (Muito longo).
+    # Se for muito longo, mas começar com o CC, aceita. Caso contrário, descarta.
+    if phone_length > 13 and has_cc:
+        return cleaned_number
+
+    # Se nenhuma regra de padronização se aplicou ou se o número é inválido
+    return None 
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
@@ -106,6 +133,8 @@ def send_whatsapp_template_message(
                             "text": contact_name 
                         }
                     ]
+                }
+            ]
                 }
             ]
         }
@@ -175,9 +204,9 @@ def main():
             cc_col, ddd_col = st.columns([1, 2])
             with ddd_col:
                 default_cc_ddd = st.text_input(
-                    "Código de País e DDD Padrão (Ex: 5511):", 
-                    value="5511",
-                    help="Código de País (Ex: 55) + DDD (Ex: 11). Essencial para padronizar números locais."
+                    "Código de País e DDD Padrão (Ex: 5531):", 
+                    value="5531",
+                    help="Código de País (Ex: 55) + DDD (Ex: 31). Essencial para padronizar números locais."
                 )
             
             st.session_state['name_col'] = name_col
