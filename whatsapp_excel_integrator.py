@@ -168,7 +168,7 @@ def format_phone_for_vcf(e164_number: str) -> str:
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
-def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, default_country_code: str, failed_contacts: list, successful_contacts: list) -> str:
+def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_name_col: str, phone_col: str, default_country_code: str, failed_contacts: list, successful_contacts: list) -> str:
     """
     Gera o conteúdo de um único arquivo VCF (vCard) a partir do DataFrame.
     Preenche as listas `failed_contacts` e `successful_contacts`.
@@ -177,20 +177,25 @@ def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, defaul
     
     for index, row in df.iterrows():
         # Usa .get() para segurança, lidando com NaN e None
-        name = str(row.get(name_col, '')).strip()
+        responsible_name = str(row.get(responsible_name_col, '')).strip()
+        student_name = str(row.get(student_name_col, '')).strip()
         original_phone = str(row.get(phone_col, '')).strip()
+        
+        # Monta o nome completo do contato (Responsável + Aluno) para o VCF
+        full_name_for_vcf = f"{responsible_name} - {student_name}" if student_name else responsible_name
         
         # Limpeza do número
         cleaned_phone_e164, failure_reason = clean_and_standardize_phone(original_phone, default_country_code)
         
-        if name and cleaned_phone_e164:
-            # NOVIDADE: Formata o número SOMENTE para o bloco VCF para visualização
+        if responsible_name and cleaned_phone_e164:
+            # Formata o número SOMENTE para o bloco VCF para visualização
             formatted_phone = format_phone_for_vcf(cleaned_phone_e164)
             
+            # Bloco VCF usa o nome composto
             vcf_block = f"""BEGIN:VCARD
 VERSION:3.0
-FN:{name}
-N:;{name};;;
+FN:{full_name_for_vcf}
+N:;{responsible_name};;;
 TEL;TYPE=CELL:{formatted_phone}
 END:VCARD"""
             vcf_blocks.append(vcf_block)
@@ -198,21 +203,24 @@ END:VCARD"""
             # Adiciona à lista de sucesso para visualização
             successful_contacts.append({
                 "Índice_Linha_Original": index + 1,
-                "Nome": name,
+                "Nome do Responsável": responsible_name, # Novo
+                "Nome do Aluno": student_name, # Novo
                 "Número Original": original_phone,
-                "Número Padronizado (E.164)": cleaned_phone_e164, # Mantém E.164 limpo na lista de sucesso
-                "Visualização VCF": formatted_phone # Adiciona a visualização VCF formatada
+                "Número Padronizado (E.164)": cleaned_phone_e164, 
+                "Visualização VCF": formatted_phone 
             })
             
         else:
             # Coleta os dados completos e o motivo da falha (Módulo 26: Construtor de Respostas)
             
-            # --- NOVIDADE: Chama a AI para explicar o defeito ---
+            # Chama a AI para explicar o defeito
             ai_explanation = explain_phone_defect_with_ai(original_phone, failure_reason)
             
             # Adiciona os metadados do erro à linha completa do DataFrame
             failed_entry = {
                 "Índice_Linha_Original": index + 1,
+                "Nome do Responsável": responsible_name, # Novo
+                "Nome do Aluno": student_name, # Novo
                 "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido.",
                 "Explicação_AI": ai_explanation
             }
@@ -313,15 +321,34 @@ def main():
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
             
             # Mapeamento de Colunas
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3) # Aumenta para 3 colunas
             
             with col1:
-                name_col = st.selectbox("Coluna do Nome Completo:", columns, index=0, key='name_col_select')
+                responsible_name_col = st.selectbox(
+                    "Coluna do Nome do Responsável:", 
+                    columns, 
+                    index=0, 
+                    key='responsible_name_col_select'
+                )
             with col2:
+                # Nova coluna para o nome do aluno
+                student_name_col = st.selectbox(
+                    "Coluna do Nome do Aluno:", 
+                    columns, 
+                    index=min(1, len(columns)-1), # Tenta selecionar a segunda coluna
+                    key='student_name_col_select'
+                )
+            with col3:
                 # Tentativa de pré-seleção para 'phone'
                 default_phone_index = next((i for i, col in enumerate(columns) if 'phone' in col.lower() or 'numero' in col.lower()), 0)
-                phone_col = st.selectbox("Coluna do Número de Telefone:", columns, index=default_phone_index, key='phone_col_select')
+                phone_col = st.selectbox(
+                    "Coluna do Número de Telefone:", 
+                    columns, 
+                    index=default_phone_index, 
+                    key='phone_col_select'
+                )
             
+            # Coluna para DDD/CC
             cc_col, ddd_col = st.columns([1, 2])
             with ddd_col:
                 default_cc_ddd = st.text_input(
@@ -330,7 +357,8 @@ def main():
                     help="Código de País (Ex: 55) + DDD (Ex: 31). Essencial para padronizar números locais."
                 )
             
-            st.session_state['name_col'] = name_col
+            st.session_state['responsible_name_col'] = responsible_name_col # Atualizado
+            st.session_state['student_name_col'] = student_name_col         # Novo
             st.session_state['phone_col'] = phone_col
             st.session_state['default_cc'] = re.sub(r'\D', '', default_cc_ddd) # Limpa e armazena
             
@@ -358,7 +386,8 @@ def main():
                     with st.spinner('Processando e limpando dados para VCF...'):
                         vcf_content = generate_vcf_content(
                             df, 
-                            st.session_state['name_col'], 
+                            st.session_state['responsible_name_col'], # Atualizado
+                            st.session_state['student_name_col'],     # Novo
                             st.session_state['phone_col'], 
                             st.session_state['default_cc'],
                             failed_contacts, # Lista de falhas
@@ -390,6 +419,9 @@ def main():
                         st.subheader("✅ Contatos Padronizados (Incluídos no VCF)")
                         st.info(f"Total de {len(successful_contacts)} contatos validados.")
                         success_df = pd.DataFrame(successful_contacts)
+                        # Reordena colunas para exibir Nome do Responsável e Aluno primeiro
+                        columns_order = ["Índice_Linha_Original", "Nome do Responsável", "Nome do Aluno", "Número Original", "Número Padronizado (E.164)", "Visualização VCF"]
+                        success_df = success_df[columns_order]
                         st.dataframe(
                             success_df,
                             use_container_width=True,
@@ -404,7 +436,13 @@ def main():
                         
                         # Converte a lista de dicionários para DataFrame para exibição no Streamlit
                         failed_df = pd.DataFrame(failed_contacts)
+                        # Reordena colunas para exibir Nome do Responsável e Aluno primeiro
+                        failed_columns_order = ["Índice_Linha_Original", "Nome do Responsável", "Nome do Aluno", "Motivo_da_Falha", "Explicação_AI", "Número Original"]
                         
+                        # Tenta reordenar, se as colunas existirem no DataFrame
+                        existing_cols = [col for col in failed_columns_order if col in failed_df.columns]
+                        failed_df = failed_df[existing_cols]
+
                         st.dataframe(
                             failed_df, 
                             use_container_width=True,
@@ -445,19 +483,24 @@ def main():
                     failure_count = 0
                     
                     # Cria um DataFrame temporário para o relatório e o exibe para updates em tempo real
-                    results_df = pd.DataFrame(columns=["Nome", "Número Original", "Status", "Detalhe da Falha"])
+                    results_df = pd.DataFrame(columns=["Nome do Responsável", "Nome do Aluno", "Número Original", "Status", "Detalhe da Falha"])
                     results_container = st.empty()
                     results_container.dataframe(results_df)
 
                     for index, row in df.iterrows():
-                        contact_name = str(row.get(st.session_state['name_col'], 'Contato Desconhecido'))
+                        # Obtém os nomes
+                        responsible_name = str(row.get(st.session_state['responsible_name_col'], 'Responsável Desconhecido'))
+                        student_name = str(row.get(st.session_state['student_name_col'], 'Aluno Desconhecido'))
                         original_phone = str(row.get(st.session_state['phone_col'], ''))
+                        
+                        contact_name = f"{responsible_name} / {student_name}" # Nome de exibição no log da API
                         
                         # Módulo 22: Otimização de Código - Usa nova tupla de retorno
                         cleaned_phone, failure_reason = clean_and_standardize_phone(original_phone, st.session_state['default_cc'])
                         
                         current_result = {
-                            "Nome": contact_name,
+                            "Nome do Responsável": responsible_name, # Novo
+                            "Nome do Aluno": student_name, # Novo
                             "Número Original": original_phone,
                             "Status": "...",
                             "Detalhe da Falha": ""
@@ -478,7 +521,7 @@ def main():
                                 api_token,
                                 cleaned_phone,
                                 template_name,
-                                contact_name
+                                responsible_name # Passa o nome do responsável para o placeholder
                             )
 
                             if api_response['status'] == 'Success':
