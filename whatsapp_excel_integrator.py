@@ -78,6 +78,27 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
     # Se nenhuma regra de padronização se aplicou ou se o número é inválido
     return None, f"Tamanho inválido ou não padronizável ({phone_length} dígitos)."
 
+def format_phone_for_vcf(e164_number: str) -> str:
+    """
+    Formata um número E.164 (ex: 5531987654321) para o formato visual solicitado: 
+    +CC (DD) 9XXXX-XXXX
+    
+    A formatação VCF é importante para compatibilidade visual na agenda, 
+    mas o formato TEL;TYPE=CELL geralmente aceita o formato limpo.
+    Faremos a formatação visual conforme solicitado.
+    """
+    if not e164_number or len(e164_number) != 13:
+        # Retorna o original se não estiver no formato 55DD9XXXXXXXX esperado
+        return e164_number 
+        
+    # Exemplo: 55 31 9 8765 4321
+    cc = e164_number[0:2] # 55
+    ddd = e164_number[2:4] # 31
+    part1 = e164_number[4:9] # 98765
+    part2 = e164_number[9:13] # 4321
+    
+    # Formato: +55 (31) 98765-4321
+    return f"+{cc} ({ddd}) {part1}-{part2}"
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
@@ -94,14 +115,17 @@ def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, defaul
         original_phone = str(row.get(phone_col, '')).strip()
         
         # Limpeza do número
-        cleaned_phone, failure_reason = clean_and_standardize_phone(original_phone, default_country_code)
+        cleaned_phone_e164, failure_reason = clean_and_standardize_phone(original_phone, default_country_code)
         
-        if name and cleaned_phone:
+        if name and cleaned_phone_e164:
+            # NOVIDADE: Formata o número SOMENTE para o bloco VCF para visualização
+            formatted_phone = format_phone_for_vcf(cleaned_phone_e164)
+            
             vcf_block = f"""BEGIN:VCARD
 VERSION:3.0
 FN:{name}
 N:;{name};;;
-TEL;TYPE=CELL:{cleaned_phone}
+TEL;TYPE=CELL:{formatted_phone}
 END:VCARD"""
             vcf_blocks.append(vcf_block)
             
@@ -110,7 +134,8 @@ END:VCARD"""
                 "Índice_Linha_Original": index + 1,
                 "Nome": name,
                 "Número Original": original_phone,
-                "Número Padronizado (E.164)": cleaned_phone
+                "Número Padronizado (E.164)": cleaned_phone_e164, # Mantém E.164 limpo na lista de sucesso
+                "Visualização VCF": formatted_phone # Adiciona a visualização VCF formatada
             })
             
         else:
