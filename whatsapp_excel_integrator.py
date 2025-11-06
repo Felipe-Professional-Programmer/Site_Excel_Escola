@@ -192,11 +192,18 @@ def main():
             # Mapeamento de Colunas
             col1, col2 = st.columns(2)
             
+            # Lógica de Pré-Seleção Modificada
+            
+            # 1. Coluna do Nome: Procura "Responsável"
+            default_name_index = next((i for i, col in enumerate(columns) if 'responsável' in col.lower()), 0)
+            
             with col1:
-                name_col = st.selectbox("Coluna do Nome Completo:", columns, index=0, key='name_col_select')
+                name_col = st.selectbox("Coluna do Nome Completo:", columns, index=default_name_index, key='name_col_select')
+            
+            # 2. Coluna do Telefone: Procura "Telefone"
+            default_phone_index = next((i for i, col in enumerate(columns) if 'telefone' in col.lower()), 0)
+            
             with col2:
-                # Tentativa de pré-seleção para 'phone'
-                default_phone_index = next((i for i, col in enumerate(columns) if 'phone' in col.lower() or 'numero' in col.lower()), 0)
                 phone_col = st.selectbox("Coluna do Número de Telefone:", columns, index=default_phone_index, key='phone_col_select')
             
             cc_col, ddd_col = st.columns([1, 2])
