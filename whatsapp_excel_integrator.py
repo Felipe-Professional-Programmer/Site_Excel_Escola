@@ -81,10 +81,10 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
-def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, default_country_code: str, failed_contacts: list) -> str:
+def generate_vcf_content(df: pd.DataFrame, name_col: str, phone_col: str, default_country_code: str, failed_contacts: list, successful_contacts: list) -> str:
     """
     Gera o conteúdo de um único arquivo VCF (vCard) a partir do DataFrame.
-    Preenche a lista `failed_contacts` com os dados completos dos números inválidos.
+    Preenche as listas `failed_contacts` e `successful_contacts`.
     """
     vcf_blocks = []
     
@@ -104,6 +104,15 @@ N:;{name};;;
 TEL;TYPE=CELL:{cleaned_phone}
 END:VCARD"""
             vcf_blocks.append(vcf_block)
+            
+            # Adiciona à lista de sucesso para visualização
+            successful_contacts.append({
+                "Índice_Linha_Original": index + 1,
+                "Nome": name,
+                "Número Original": original_phone,
+                "Número Padronizado (E.164)": cleaned_phone
+            })
+            
         else:
             # Coleta os dados completos e o motivo da falha (Módulo 26: Construtor de Respostas)
             # Adiciona os metadados do erro à linha completa do DataFrame
@@ -245,8 +254,9 @@ def main():
                 
                 if st.button("📥 Gerar e Baixar Arquivo VCF", key="btn_vcf_gen"):
                     
-                    # Lista para armazenar os contatos que falharam na limpeza (Módulo 26)
+                    # Listas para armazenar os contatos (Módulo 26)
                     failed_contacts = []
+                    successful_contacts = [] 
                     
                     with st.spinner('Processando e limpando dados para VCF...'):
                         vcf_content = generate_vcf_content(
@@ -254,7 +264,8 @@ def main():
                             st.session_state['name_col'], 
                             st.session_state['phone_col'], 
                             st.session_state['default_cc'],
-                            failed_contacts # Passa a lista por referência
+                            failed_contacts, # Lista de falhas
+                            successful_contacts # Lista de sucesso
                         )
                     
                     # Calcula o total de blocos VCF gerados
@@ -272,26 +283,34 @@ def main():
                     else:
                         st.error("Nenhum contato válido foi encontrado após a limpeza dos números. Verifique o Código de País e DDD.")
 
-                    # --- NOVO REQUISITO: Relatório de Falhas ---
+                    # --- NOVO REQUISITO: Relatório de Falhas e Sucessos ---
                     st.markdown("---")
                     # Módulo 26: Usando o título solicitado pelo usuário
                     st.header("3. Visualização e Validação dos Números") 
                     
+                    # 1. VISUALIZAÇÃO DE SUCESSO
+                    if successful_contacts:
+                        st.subheader("✅ Contatos Padronizados (Incluídos no VCF)")
+                        st.info(f"Total de {len(successful_contacts)} contatos validados.")
+                        success_df = pd.DataFrame(successful_contacts)
+                        st.dataframe(
+                            success_df,
+                            use_container_width=True,
+                            height=300
+                        )
+                        st.markdown("---")
+                    
+                    # 2. VISUALIZAÇÃO DE FALHA
                     if failed_contacts:
+                        st.subheader("❌ Lista de Números que Falharam (Dados Completos)")
                         st.warning(f"⚠️ **{len(failed_contacts)}** contato(s) falhou(aram) na padronização e NÃO foram incluídos no VCF.")
-                        
-                        # Módulo 26: Construtor de Respostas - Exibição dos dados completos dos falhos
-                        st.subheader("Lista de Números que Falharam (Dados Completos)")
                         
                         # Converte a lista de dicionários para DataFrame para exibição no Streamlit
                         failed_df = pd.DataFrame(failed_contacts)
                         
-                        # Módulo 26: Exibe a lista completa (Corrigindo o problema do "99 na lista")
-                        # Garante que todos os falhos sejam exibidos.
                         st.dataframe(
                             failed_df, 
                             use_container_width=True,
-                            # Define a altura máxima para evitar que o DF ocupe toda a tela.
                             height=300 
                         )
                         
