@@ -8,6 +8,61 @@ from typing import Optional, Dict, Any, Tuple
 
 # --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO ---
 
+def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=3) -> str:
+    """
+    Chama o modelo Gemini para analisar e explicar o defeito de um número de telefone 
+    que falhou na padronização, simulando o uso da AI para análise textual.
+    """
+    # Módulo 4: Simulação de Integrações - Configuração da API Gemini
+    API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+    API_KEY = ""  # Deixar vazio para uso em ambientes Canvas/Google
+
+    # Módulo 26: Construtor de Respostas - Estruturação do Prompt
+    user_query = f"""
+    Analise o seguinte número de telefone original: "{original_number}".
+    Ele falhou na padronização com o motivo: "{reason}".
+    
+    Explique em português, de forma concisa (máximo 2 frases), qual o formato correto esperado
+    para um número de celular brasileiro (+55 DD 9XXXX-XXXX) e o que está faltando ou 
+    incorreto no número fornecido, considerando as regras de 10 a 13 dígitos.
+    """
+
+    payload = {
+        "contents": [{"parts": [{"text": user_query}]}],
+        "systemInstruction": {"parts": [{"text": "Você é um analista de telecomunicações focado em padrões de numeração brasileiros. Sua única tarefa é explicar o erro de formatação de um número, focando em Código de País (+55), DDD e o nono dígito (9), e o formato esperado (DD + 9XXXX-XXXX)."}]},
+    }
+    
+    headers = {
+        'Content-Type': 'application/json',
+    }
+
+    # Simulação de Loop de Retry com Backoff Exponencial
+    for attempt in range(max_retries):
+        try:
+            # Tenta chamar a API
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
+            response.raise_for_status() 
+            
+            result = response.json()
+            # Extrai o texto gerado
+            text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'Não foi possível obter a explicação da AI.')
+            return text
+            
+        except requests.exceptions.RequestException as e:
+            # Atraso exponencial
+            wait_time = 2 ** attempt
+            if attempt < max_retries - 1:
+                time.sleep(wait_time)
+            else:
+                # Retorna uma explicação local robusta em caso de falha da API
+                return (f"Falha ao consultar a AI ({reason}). O formato brasileiro requer 13 dígitos (55 + DDD + 9 dígitos), "
+                        f"e seu número não se encaixou nos padrões de correção automática.")
+        except Exception:
+            return "Erro desconhecido ao processar a resposta da AI."
+            
+    return "Erro desconhecido."
+
+
 # Módulo de Limpeza de Número de Telefone (CRITICAL)
 def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -23,6 +78,24 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
     CC = default_country_code[:2] if len(default_country_code) >= 2 else "55" 
     DD = default_country_code[2:4] if len(default_country_code) >= 4 else "31"
     
+    # --- NOVIDADE: Pré-validação do formato visual do hífen (Corrigido) ---
+    raw_number_str = str(number)
+    if '-' in raw_number_str:
+        parts = raw_number_str.split('-')
+        
+        # Deve ter exatamente um hífen
+        if len(parts) != 2:
+             return None, "Formato do hífen inválido. Deve ter exatamente um hífen."
+        
+        # Remove caracteres não-dígitos das partes para contagem
+        part2_clean = re.sub(r'\D', '', parts[1])
+
+        # Se a parte 2 não tiver 4 dígitos, falha conforme regra do usuário.
+        # Esta é a validação rigorosa para rejeitar números como XXXX-147 (3 dígitos).
+        if len(part2_clean) != 4:
+            return None, f"A segunda parte do número (após o hífen) deve conter exatamente 4 dígitos. Encontrado: {len(part2_clean)} dígitos."
+            
+    
     # 1. Converte para string e remove todos os caracteres não-dígitos
     cleaned_number = re.sub(r'\D', '', str(number))
     phone_length = len(cleaned_number)
@@ -34,51 +107,34 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
     # Verifica se o número já tem o CC (Ex: 55)
     has_cc = cleaned_number.startswith(CC)
     
-    # NOVO REQUISITO: Tratamento de números de 12 dígitos que são 55 + DD + 8 dígitos (faltando o '9')
+    # Tratamento de números de 12 dígitos que são 55 + DD + 8 dígitos (faltando o '9')
     if phone_length == 12 and has_cc:
-        # Padrão: 55 + DD + 8 dígitos. É um celular brasileiro antigo que precisa do '9'
-        # Estrutura: CC (2) + DD (2) + 8 dígitos (8) = 12 dígitos
-        
-        # Inferred: CC (2) + DD (2) + '9' (1) + 8 dígitos (8) = 13 dígitos
+        # Padrão: 55 + DD + 8 dígitos. (Ex: 553187654321)
         inferred_number = cleaned_number[:4] + '9' + cleaned_number[4:]
         return inferred_number, None
         
-    # REQUISITO ANTERIOR: Número com exatamente 10 dígitos (DD + 8 dígitos, assumindo falta de 55 e '9')
+    # Número com exatamente 10 dígitos (DD + 8 dígitos, assumindo falta de 55 e '9')
     if phone_length == 10:
         # O número é DD + 8 dígitos (ex: 3187654321).
-        # A nova regra diz para inferir o '9' que estava faltando
         inferred_number = CC + cleaned_number[:2] + '9' + cleaned_number[2:]
-        # Resultado: 55 + DD + 9 + 8 dígitos (total 13)
         return inferred_number, None 
 
     # Caso 1: Número Local (8 ou 9 dígitos). Faltam CC e DD.
     if phone_length in [8, 9]:
-        # Completa com o CC e DD padrão (Ex: 55 + 31 + 987654321)
         return CC + DD + cleaned_number, None
 
     # Caso 2: Número com DDD (11 dígitos). Falta o CC.
-    # Ex: 31987654321
     if phone_length == 11:
-        # Verifica se começa com o DDD configurado (Ex: 31)
         if cleaned_number.startswith(DD):
-            # Completa com o CC (Ex: 55 + 31987654321)
             return CC + cleaned_number, None
         else:
-            # Não começa com o DDD configurado, mas tem 11 dígitos.
-            # Assumimos que o CC está faltando, completamos para ser seguro.
             return CC + cleaned_number, None
 
-    # Caso 3: Número Internacional Completo (12 ou 13 dígitos).
-    # O caso de 12 dígitos com 55 + DD + 8 já foi tratado acima.
-    if phone_length in [12, 13]:
-        # Se já começa com o CC (55) e tem 13 dígitos, está correto.
-        if has_cc and phone_length == 13:
+    # Caso 3: Número Internacional Completo (13 dígitos).
+    if phone_length == 13:
+        if has_cc:
             return cleaned_number, None
         
-        # Se tem 12 dígitos, mas não começa com o CC (ex: é um outro país),
-        # ou se tem 13 mas não começa com 55, é complexo, mas por padrão brasileiro
-        # ele deve ser 13 dígitos com 55.
-
     # Caso 4: Outros tamanhos (Muito longo ou muito curto/Inválido)
     if phone_length < 8:
         return None, f"Número muito curto ({phone_length} dígitos)."
@@ -150,12 +206,18 @@ END:VCARD"""
             
         else:
             # Coleta os dados completos e o motivo da falha (Módulo 26: Construtor de Respostas)
+            
+            # --- NOVIDADE: Chama a AI para explicar o defeito ---
+            ai_explanation = explain_phone_defect_with_ai(original_phone, failure_reason)
+            
             # Adiciona os metadados do erro à linha completa do DataFrame
             failed_entry = {
                 "Índice_Linha_Original": index + 1,
-                "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido."
+                "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido.",
+                "Explicação_AI": ai_explanation
             }
             # Combina os metadados com todos os dados da linha original
+            # O operador '|' para dicionários (PEP 584) é usado para mesclar
             failed_contacts.append(failed_entry | row.to_dict()) 
             
     return '\n'.join(vcf_blocks)
@@ -337,7 +399,7 @@ def main():
                     
                     # 2. VISUALIZAÇÃO DE FALHA
                     if failed_contacts:
-                        st.subheader("❌ Lista de Números que Falharam (Dados Completos)")
+                        st.subheader("❌ Lista de Números que Falharam (Dados Completos + Explicação AI)")
                         st.warning(f"⚠️ **{len(failed_contacts)}** contato(s) falhou(aram) na padronização e NÃO foram incluídos no VCF.")
                         
                         # Converte a lista de dicionários para DataFrame para exibição no Streamlit
@@ -403,6 +465,8 @@ def main():
 
                         if not cleaned_phone:
                             failure_count += 1
+                            # NOTE: Aqui não chamamos a AI para manter o foco do Streamlit na API, mas 
+                            # a lógica de padronização é a mesma.
                             current_result.update({"Status": "❌ Falha", "Detalhe da Falha": f"Número Limpo/Formatado Inválido. Motivo: {failure_reason or 'Desconhecido'}"})
                         else:
                             # Simulação de atraso (boas práticas de API)
@@ -429,7 +493,7 @@ def main():
 
                         # Atualiza o DataFrame do relatório
                         results_df.loc[index] = current_result
-                        results_container.dataframe(results_df.style.apply(lambda s: ['background-color: #ffcccc' if 'Falha' in v else '' for v in v in s], subset=['Status', 'Detalhe da Falha']))
+                        results_container.dataframe(results_df.style.apply(lambda s: ['background-color: #ffcccc' if 'Falha' in v else '' for v in s], subset=['Status', 'Detalhe da Falha']))
                         
                         # Atualiza o log de progresso
                         status_log.write(f"Processando contato {index+1}/{total_rows}... (Sucessos: {success_count}, Falhas: {failure_count})")
