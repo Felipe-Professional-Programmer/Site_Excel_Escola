@@ -7,248 +7,25 @@ import time
 from io import BytesIO
 from typing import Optional, Dict, Any, Tuple
 
-# --- CONSTANTES DE AI (ATUALIZADAS COM CHAVES FORNECIDAS) ---
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# --- CONSTANTES DE AI REMOVIDAS ---
+# Nenhuma chave ou constante de AI é necessária, pois o mapeamento é fixo.
+# ----------------------------------
 
-# 1. Credenciais para Detecção de Colunas (DeepSeek R1T2) - CHAVE ATUALIZADA
-OPENROUTER_DEEPSEEK_KEY = "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"
-DEEPSEEK_MODEL = "tngtech/deepseek-r1t2-chimera:free"
-
-# 2. Credenciais para Chatbot Conversacional e Explicação de Defeito (Gemini 2.0 Flash) - CHAVE ATUALIZADA
-OPENROUTER_GEMINI_KEY = "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"
-GEMINI_MODEL = "google/gemini-2.0-flash-exp:free"
-
-# A latência fixa foi removida conforme a solicitação do usuário.
-CRITICAL_RETRY_DELAY_SECONDS = 60 # 1 minuto, para qualquer tipo de falha
-# -----------------------------------------------------------
-
-# --- CÓDIGO DA APLICAÇÃO PARA CONTEXTO DO CHATBOT ---
-# O chatbot da barra lateral usará esse contexto para responder sobre o próprio código.
-APP_CODE_CONTEXT = """
-# Arquivo: whatsapp_excel_integrator.py (Streamlit App)
-# [O código completo deste arquivo é incluído no prompt do sistema do chatbot.]
-#
-# Arquivo: requirements.txt
-# streamlit
-# pandas
-# requests
-# openpyxl
-"""
-
-# --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO ---
-
-def openrouter_chat_api(messages: list, api_key: str, model: str, system_prompt: str) -> str:
-    """
-    Chama a API OpenRouter com o modelo e a chave especificados.
-    A chamada é síncrona (requests.post é bloqueante), garantindo que
-    não haverá múltiplas solicitações simultâneas.
-    """
-    payload = {
-        "model": model,
-        "messages": messages,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "[https://canvas.google.com](https://canvas.google.com)", 
-        "X-Title": "AI Chatbot Integrado"
-    }
-
-    # Adiciona o prompt do sistema no início da lista de mensagens
-    full_messages = [
-        {"role": "system", "content": system_prompt}
-    ] + messages
-
-    try:
-        response = requests.post(
-            url=OPENROUTER_URL,
-            headers=headers,
-            data=json.dumps(payload),
-            timeout=30 
-        )
-        response.raise_for_status()
-        api_result = response.json()
-        
-        text = api_result['choices'][0]['message']['content'].strip()
-        
-        return text
-        
-    except requests.exceptions.RequestException as e:
-        # Se ocorrer uma RequestException (falha de conexão, timeout ou HTTP 4xx/5xx),
-        # a função chamadora lidará com o retry/delay.
-        return f"Falha ao consultar a AI via OpenRouter. Erro: {e}"
-    except (KeyError, IndexError):
-        return "Erro ao processar a resposta da AI."
+# --- CONSTANTES DE MAPEAMENTO FIXO (NOVO REQUISITO) ---
+# O aplicativo agora espera que a planilha tenha EXATAMENTE estas colunas.
+FIXED_COLUMNS_MAP = {
+    "turma_name_col": "Turma",
+    "student_name_col": "Aluno",
+    "phone_col": "Telefone",
+    "responsible_name_col": "Responsável",
+}
+# ----------------------------------------------------
 
 
-def explain_phone_defect_with_ai(original_number: str, reason: str, max_retries=3) -> str:
-    """
-    Chama o modelo Gemini (via OpenRouter) para analisar e explicar o defeito de um número.
-    """
-    system_prompt = "Você é um analista de telecomunicações focado em padrões de numeração brasileiros. Sua única tarefa é explicar o erro de formatação de um número, focando em Código de País (+55), DDD e o nono dígito (9), e o formato esperado (DD + 9XXXX-XXXX)."
+# --- I. FUNÇÕES CRÍTICAS DE PROCESSAMENTO (Simplificadas) ---
 
-    user_query = f"""
-    Analise o seguinte número de telefone original: "{original_number}".
-    Ele falhou na padronização com o motivo: "{reason}".
-    
-    Explique em português, de forma concisa (máximo 2 frases), qual o formato correto esperado
-    para um número de celular brasileiro (+55 DD 9XXXX-XXXX) e o que está faltando ou 
-    incorreto no número fornecido, considerando as regras de 10 a 13 dígitos.
-    """
+# Funções de AI para explicação e detecção foram removidas.
 
-    messages = [{"role": "user", "content": user_query}]
-    
-    # Simulação de Loop de Retry com delay fixo de 1 minuto em caso de falha
-    for attempt in range(max_retries):
-        try:
-            # Reutiliza a função genérica para chamar o Gemini via OpenRouter
-            text = openrouter_chat_api(
-                messages, 
-                OPENROUTER_GEMINI_KEY, 
-                GEMINI_MODEL, 
-                system_prompt
-            )
-            
-            # Se a resposta for um erro de falha, aciona o delay
-            if text.startswith("Falha ao consultar a AI"):
-                if attempt < max_retries - 1:
-                    st.warning(f"Falha na AI. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
-                    time.sleep(CRITICAL_RETRY_DELAY_SECONDS) 
-                    continue
-                else:
-                    # Retorna uma explicação local robusta em caso de falha persistente
-                    return (f"Falha ao consultar a AI ({reason}). O formato brasileiro requer 13 dígitos (55 + DDD + 9 dígitos), "
-                            f"e seu número não se encaixou nos padrões de correção automática.")
-            
-            return text
-            
-        except Exception:
-            # Captura exceções inesperadas e também aplica a regra do delay antes de desistir
-            if attempt < max_retries - 1:
-                st.warning(f"Erro inesperado na chamada da AI. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
-                time.sleep(CRITICAL_RETRY_DELAY_SECONDS) 
-                continue
-            
-            # Retorna uma explicação local robusta em caso de falha persistente
-            return (f"Falha ao consultar a AI ({reason}). O formato brasileiro requer 13 dígitos (55 + DDD + 9 dígitos), "
-                    f"e seu número não se encaixou nos padrões de correção automática.")
-            
-    return "Erro desconhecido."
-
-def detect_columns_with_ai(columns: list, sample_row: Dict[str, Any], max_retries=3) -> Dict[str, str]:
-    """
-    Chama a AI DeepSeek R1T2 (via OpenRouter) para mapear os campos semânticos.
-    Aplica delay fixo de 1 minuto em caso de qualquer erro.
-    """
-    
-    required_fields = ["Nome do Responsável", "Nome do Aluno", "Nome da Turma", "Telefone"]
-    
-    # Prepara a matriz textual da linha de amostra para a IA
-    sample_text = ', '.join(map(str, sample_row.values()))
-    
-    # Módulo 40: Deployment Wrapper - Prompt Estruturado para DeepSeek
-    system_prompt = """
-# DEEP SYSTEM PROMPT: ANALISTA DE DADOS E MAPEAMENTO DE COLUNAS
-Você é um Analista de Dados de Alto Nível com foco em mapeamento de colunas para campos semânticos.
-Sua única tarefa é mapear as colunas fornecidas abaixo para os QUATRO campos semânticos requeridos.
-Você DEVE retornar APENAS um objeto JSON válido, sem texto explicativo, introdução, ou formatação Markdown (como ```json).
-
-# CAMPOS SEMÂNTICOS REQUERIDOS:
-1. responsible_name_col: Nome EXATO da coluna que representa o Nome do Responsável ou Contato Principal.
-2. student_name_col: Nome EXATO da coluna que representa o Nome do Aluno.
-3. turma_name_col: Nome EXATO da coluna que representa a Turma ou Classe.
-4. phone_col: Nome EXATO da coluna que representa o Telefone ou Número de Contato.
-
-Se você não conseguir identificar uma coluna, use o valor 'NÃO ENCONTRADO' para aquela chave.
-O seu trabalho se resume a retornar o JSON final.
-"""
-
-    ai_prompt = f"""
-# DADOS DA TABELA EXCEL (MATRIZ UNIDIMENSIONAL DE TEXTO PARA CONTEXTO)
-COLUNAS (Títulos):
-[{', '.join(columns)}]
-
-LINHA DE AMOSTRA (Valores em ordem):
-[{sample_text}]
-
-Com base nas COLUNAS, identifique as chaves e retorne APENAS o JSON.
-"""
-
-    payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": ai_prompt
-            }
-        ],
-        "response_mime_type": "application/json",
-        "response_schema": {
-            "type": "object",
-            "properties": {
-                "responsible_name_col": {"type": "string"},
-                "student_name_col": {"type": "string"},
-                "turma_name_col": {"type": "string"},
-                "phone_col": {"type": "string"}
-            }
-        }
-    }
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_DEEPSEEK_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "[https://canvas.google.com](https://canvas.google.com)", 
-        "X-Title": "AI Excel-to-WhatsApp Sender"
-    }
-
-    # Módulo 37: Gerenciamento de Dependências (Retry Loop) com Delay Fixo de 1 Minuto
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                url=OPENROUTER_URL,
-                headers=headers,
-                data=json.dumps(payload),
-                timeout=30 
-            )
-            response.raise_for_status() 
-            api_result = response.json()
-            
-            ai_response_text = api_result['choices'][0]['message']['content'].strip()
-            # Módulo 35: Output Polisher - Limpa e tenta parsear a string JSON da IA
-            clean_json_text = ai_response_text.replace('```json', '').replace('```', '').strip()
-            final_result = json.loads(clean_json_text)
-            
-            # Módulo 14: Verificação Dedutiva - Valida a estrutura JSON
-            required_keys = ['responsible_name_col', 'student_name_col', 'turma_name_col', 'phone_col']
-            if not all(key in final_result for key in required_keys):
-                 raise ValueError(f"AI returned incomplete mapping. Missing keys.")
-            
-            # Verifica se os nomes mapeados realmente existem nas colunas fornecidas
-            for key, col_name in final_result.items():
-                if col_name and col_name != 'NÃO ENCONTRADO' and col_name not in columns:
-                    # Módulo 32: Inclusão Cultural - Alerta no log e ajusta
-                    final_result[key] = 'NÃO ENCONTRADO'
-                    
-            return final_result
-
-        except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
-            if attempt < max_retries - 1:
-                # Delay de 1 minuto (60s) conforme solicitação do usuário para QUALQUER falha
-                st.warning(f"Falha na Detecção Automática de Colunas. Tentando novamente em {CRITICAL_RETRY_DELAY_SECONDS} segundos (Tentativa {attempt + 2}/{max_retries}).")
-                time.sleep(CRITICAL_RETRY_DELAY_SECONDS)
-                continue
-            else:
-                error_message = f"Falha na detecção automática de colunas por AI (Tentativas: {max_retries}). Erro: {e}"
-                if 'response' in locals() and response.status_code == 401:
-                    error_message += " (Token de API Inválido ou Expirado)"
-                elif 'response' in locals():
-                    error_message += f" (Status HTTP: {response.status_code})"
-                raise Exception(error_message)
-                
-    return {}
-
-# Módulo de Limpeza de Número de Telefone (CRITICAL)
 def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Limpa o número de telefone, removendo caracteres não-dígitos e
@@ -356,7 +133,7 @@ def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_na
     vcf_blocks = []
     
     for index, row in df.iterrows():
-        # Usa .get() para segurança, lidando com NaN e None
+        # Mapeamento fixo conforme as colunas esperadas
         responsible_name = str(row.get(responsible_name_col, '')).strip()
         student_name = str(row.get(student_name_col, '')).strip()
         turma_name = str(row.get(turma_name_col, '')).strip() 
@@ -393,9 +170,6 @@ END:VCARD"""
             })
             
         else:
-            # Chama a AI para explicar o defeito
-            ai_explanation = explain_phone_defect_with_ai(original_phone, failure_reason)
-            
             # Adiciona os metadados do erro à linha completa do DataFrame
             failed_entry = {
                 "Índice_Linha_Original": index + 1,
@@ -404,7 +178,7 @@ END:VCARD"""
                 "Nome da Turma": turma_name, 
                 "Telefone": original_phone, 
                 "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido.",
-                "Explicação_AI": ai_explanation
+                "Explicação_Manual": "O número não pôde ser padronizado. Verifique se ele contém o DDD e o 9º dígito se for celular." # Mensagem manual
             }
             # Combina os metadados com todos os dados da linha original
             failed_contacts.append(failed_entry | row.to_dict()) 
@@ -470,86 +244,24 @@ def send_whatsapp_template_message(
 
 # --- II. ESTRUTURA E INTERFACE DO STREAMLIT ---
 
-def chat_interface():
-    """Implementa o chatbot conversacional na barra lateral."""
-    
-    # Módulo 33: Imersão Narrativa - Boas-vindas amigáveis
-    st.sidebar.title("💬 AI Code-Tutor (Gemini Flash)")
-    st.sidebar.markdown("Pergunte-me sobre este código Streamlit (lógica, bugs, refatoração)!")
-    st.sidebar.markdown("---")
-
-    # Inicializa o histórico de chat
-    if 'chat_history' not in st.session_state:
-        st.session_state['chat_history'] = [
-            {"role": "assistant", "content": "Olá! Eu sou seu tutor de código, e tenho acesso a todos os arquivos deste projeto. Como posso te ajudar a entender ou otimizar este aplicativo?"}
-        ]
-
-    # Exibe o histórico de mensagens
-    for message in st.session_state.chat_history:
-        with st.sidebar.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Entrada do usuário
-    if prompt := st.sidebar.chat_input("Pergunte algo..."):
-        # Adiciona a mensagem do usuário ao histórico
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        
-        with st.sidebar.chat_message("user"):
-            st.markdown(prompt)
-
-        # Prepara a chamada da API
-        with st.sidebar.chat_message("assistant"):
-            with st.spinner("🤖 Pensando..."):
-                
-                # Módulo 26: Construtor de Respostas - Estrutura do System Prompt
-                # Inclui o código completo como contexto para a AI
-                system_prompt = f"""
-                Você é um especialista em Python e no framework Streamlit. Seu objetivo é ajudar o usuário a entender, debugar, otimizar ou refatorar o código abaixo.
-                O usuário está desenvolvendo este aplicativo. Responda de forma útil, clara e concisa.
-                O código está disponível em uma variável chamada 'APP_CODE_CONTEXT'.
-
-                REGRAS CRÍTICAS:
-                1. Mantenha o tom profissional e prestativo.
-                2. Baseie todas as suas respostas no código fornecido.
-                3. O tempo de resposta da API (excluindo o tempo de espera) é uma limitação de latência.
-                4. NÃO adicione a chave de API nos snippets de código de exemplo que você fornecer ao usuário.
-                
-                CONTEXTO DO CÓDIGO (Para sua análise):
-                {APP_CODE_CONTEXT}
-                """
-                
-                # Envia apenas o histórico de conversação (sem o prompt do sistema)
-                api_response = openrouter_chat_api(
-                    st.session_state.chat_history, 
-                    OPENROUTER_GEMINI_KEY, 
-                    GEMINI_MODEL, 
-                    system_prompt
-                )
-            
-            st.markdown(api_response)
-
-        # Adiciona a resposta da AI ao histórico
-        st.session_state.chat_history.append({"role": "assistant", "content": api_response})
-
-
 def main():
-    # Módulo 33: Imersão Narrativa - Configuração de Página
+    # Remove a interface do chat AI
+    
     st.set_page_config(
-        page_title="AI Excel-to-WhatsApp Sender",
+        page_title="Excel-to-WhatsApp Sender",
         layout="wide",
-        initial_sidebar_state="expanded" # Expande o sidebar para o chat
+        initial_sidebar_state="collapsed" 
     )
     
-    # 1. Carrega a interface do Chatbot na Sidebar
-    chat_interface()
-
-    st.title("🚀 Conversor Excel/CSV para Contatos/WhatsApp")
+    st.title("🚀 Conversor Excel/CSV para Contatos/WhatsApp (Mapeamento Fixo)")
     st.markdown("Automatize a integração de contatos da sua planilha para o celular (VCF) ou para o WhatsApp Business Cloud API.")
     st.markdown("---")
 
     # --- Step 1: Upload & Map ---
     
     st.header("1. Upload e Mapeamento de Dados")
+    st.markdown("⚠️ **Atenção:** Este aplicativo espera que seu arquivo Excel/CSV contenha as colunas **Turma**, **Aluno**, **Telefone** e **Responsável** com estes nomes exatos.")
+    
     uploaded_file = st.file_uploader("Selecione seu arquivo (.xlsx, .xls ou .csv)", type=["xlsx", "xls", "csv"])
 
     if uploaded_file is not None:
@@ -567,55 +279,36 @@ def main():
             
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
             
-            # --- NOVO: Chamada da AI para Mapeamento de Colunas ---
-            try:
-                # Módulo 16: Geração de Meta-Prompts
-                sample_row = df.iloc[0].to_dict()
-                
-                with st.spinner("🤖 Analisando cabeçalhos com IA (DeepSeekR1T2) para mapeamento automático de colunas..."):
-                    mapped_cols = detect_columns_with_ai(columns, sample_row)
-                    
-                # Extrai os resultados mapeados
-                responsible_name_col = mapped_cols.get('responsible_name_col')
-                student_name_col = mapped_cols.get('student_name_col')
-                phone_col = mapped_cols.get('phone_col')
-                turma_name_col = mapped_cols.get('turma_name_col')
-                
-                # Verifica se a AI conseguiu identificar todas as colunas (ou se retornou 'NÃO ENCONTRADO')
-                required_fields_map = {
-                    "Nome do Responsável": responsible_name_col,
-                    "Nome do Aluno": student_name_col,
-                    "Telefone": phone_col,
-                    "Nome da Turma": turma_name_col
-                }
-                
-                missing_or_unfound_cols = {friendly_name: col_name for friendly_name, col_name in required_fields_map.items() if col_name is None or col_name == 'NÃO ENCONTRADO' or col_name not in columns}
-                
-                if missing_or_unfound_cols:
-                    unfound_names = ", ".join(missing_or_unfound_cols.keys())
-                    st.error(f"❌ A IA não conseguiu mapear automaticamente as seguintes colunas: {unfound_names}. Por favor, verifique se os nomes das colunas no seu arquivo são claros.")
-                    return
-                
-                # Se o mapeamento foi bem-sucedido
-                st.success("✅ Mapeamento de colunas concluído com sucesso via IA!")
+            # --- Mapeamento Fixo e Validação ---
+            
+            # Mapeia diretamente para os nomes fixos
+            responsible_name_col = FIXED_COLUMNS_MAP['responsible_name_col']
+            student_name_col = FIXED_COLUMNS_MAP['student_name_col']
+            phone_col = FIXED_COLUMNS_MAP['phone_col']
+            turma_name_col = FIXED_COLUMNS_MAP['turma_name_col']
+            
+            required_cols = [responsible_name_col, student_name_col, phone_col, turma_name_col]
+            missing_cols = [col for col in required_cols if col not in columns]
 
-            except Exception as e:
-                st.error(f"❌ Erro Crítico na Detecção Automática por IA. O aplicativo não pode prosseguir. Detalhes: {e}")
+            if missing_cols:
+                st.error(f"❌ Erro de Mapeamento: As seguintes colunas obrigatórias não foram encontradas em seu arquivo: **{', '.join(missing_cols)}**.")
                 return
             
+            st.success("✅ Todas as colunas necessárias foram encontradas.")
+
             # =========================================================================
-            # Mapeamento de Colunas FIXO (Resultado da AI)
+            # Mapeamento de Colunas FIXO (Resultado da AI REMOVIDO)
             # =========================================================================
             
             # Exibe as colunas fixas (Somente para informação do usuário)
-            st.subheader("Colunas Mapeadas Automaticamente:")
+            st.subheader("Colunas Mapeadas Automaticamente (Nomes Fixos):")
             col_info1, col_info2 = st.columns(2)
             with col_info1:
-                st.markdown(f"**Nome do Responsável:** `{responsible_name_col}`")
-                st.markdown(f"**Nome do Aluno:** `{student_name_col}`")
+                st.markdown(f"**Responsável:** `{responsible_name_col}`")
+                st.markdown(f"**Aluno:** `{student_name_col}`")
             with col_info2:
-                st.markdown(f"**Nome da Turma:** `{turma_name_col}`")
-                st.markdown(f"**Número de Telefone:** `{phone_col}`")
+                st.markdown(f"**Turma:** `{turma_name_col}`")
+                st.markdown(f"**Telefone:** `{phone_col}`")
 
             
             # Armazenamento das colunas fixas na session_state
@@ -706,7 +399,7 @@ def main():
                     
                     # 2. VISUALIZAÇÃO DE FALHA
                     if failed_contacts:
-                        st.subheader("❌ Lista de Números que Falharam (Dados Completos + Explicação AI)")
+                        st.subheader("❌ Lista de Números que Falharam (Dados Completos + Explicação Manual)")
                         st.warning(f"⚠️ **{len(failed_contacts)}** contato(s) falhou(aram) na padronização e NÃO foram incluídos no VCF.")
                         
                         # Converte a lista de dicionários para DataFrame para exibição no Streamlit
@@ -725,10 +418,10 @@ def main():
                                 width="large",
                                 help="Por que o número falhou na padronização.",
                             ),
-                            "Explicação_AI": st.column_config.Column(
-                                "Explicação_AI",
+                            "Explicação_Manual": st.column_config.Column(
+                                "Explicação_Manual", # Trocado de AI para Manual
                                 width="large",
-                                help="Diagnóstico da AI para o formato incorreto."
+                                help="Diagnóstico manual para o formato incorreto."
                             ),
                             # Adicionar as demais colunas do Excel para 'Dados Completos'
                         }
@@ -741,7 +434,7 @@ def main():
                             "Nome da Turma", 
                             "Telefone",
                             "Motivo_da_Falha", 
-                            "Explicação_AI"
+                            "Explicação_Manual"
                         ]
                         
                         # Garante que apenas colunas existentes sejam usadas
