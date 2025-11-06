@@ -168,7 +168,7 @@ def format_phone_for_vcf(e164_number: str) -> str:
 
 # --- PATH A: VCF (vCard) GENERATION ---
 
-def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_name_col: str, phone_col: str, default_country_code: str, failed_contacts: list, successful_contacts: list) -> str:
+def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_name_col: str, phone_col: str, turma_name_col: str, default_country_code: str, failed_contacts: list, successful_contacts: list) -> str:
     """
     Gera o conteúdo de um único arquivo VCF (vCard) a partir do DataFrame.
     Preenche as listas `failed_contacts` e `successful_contacts`.
@@ -179,6 +179,7 @@ def generate_vcf_content(df: pd.DataFrame, responsible_name_col: str, student_na
         # Usa .get() para segurança, lidando com NaN e None
         responsible_name = str(row.get(responsible_name_col, '')).strip()
         student_name = str(row.get(student_name_col, '')).strip()
+        turma_name = str(row.get(turma_name_col, '')).strip() # Novo
         original_phone = str(row.get(phone_col, '')).strip()
         
         # Monta o nome completo do contato (Responsável + Aluno) para o VCF
@@ -203,8 +204,9 @@ END:VCARD"""
             # Adiciona à lista de sucesso para visualização
             successful_contacts.append({
                 "Índice_Linha_Original": index + 1,
-                "Nome do Responsável": responsible_name, # Novo
-                "Nome do Aluno": student_name, # Novo
+                "Nome do Responsável": responsible_name, 
+                "Nome do Aluno": student_name, 
+                "Nome da Turma": turma_name, # Novo
                 "Número Original": original_phone,
                 "Número Padronizado (E.164)": cleaned_phone_e164, 
                 "Visualização VCF": formatted_phone 
@@ -219,8 +221,10 @@ END:VCARD"""
             # Adiciona os metadados do erro à linha completa do DataFrame
             failed_entry = {
                 "Índice_Linha_Original": index + 1,
-                "Nome do Responsável": responsible_name, # Novo
-                "Nome do Aluno": student_name, # Novo
+                "Nome do Responsável": responsible_name, 
+                "Nome do Aluno": student_name, 
+                "Nome da Turma": turma_name, # Novo
+                "Telefone": original_phone, # Novo
                 "Motivo_da_Falha": failure_reason or "Nome ou Número Limpo Inválido.",
                 "Explicação_AI": ai_explanation
             }
@@ -320,35 +324,42 @@ def main():
             
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso. {len(df)} linhas encontradas.")
             
-            # Mapeamento de Colunas
-            col1, col2, col3 = st.columns(3) # Aumenta para 3 colunas
+            # =========================================================================
+            # Mapeamento de Colunas FIXO (Sem SelectBox)
+            # ATENÇÃO: Ajuste estes nomes para corresponder exatamente às suas colunas do Excel.
+            # =========================================================================
+            fixed_responsible_name_col = "Nome_Responsavel" # NOME EXATO DA COLUNA NO EXCEL
+            fixed_student_name_col = "Nome_Aluno"           # NOME EXATO DA COLUNA NO EXCEL
+            fixed_phone_col = "Telefone"                     # NOME EXATO DA COLUNA NO EXCEL
+            fixed_turma_name_col = "Nome_Turma"              # NOVO: NOME EXATO DA COLUNA NO EXCEL
             
-            with col1:
-                responsible_name_col = st.selectbox(
-                    "Coluna do Nome do Responsável:", 
-                    columns, 
-                    index=0, 
-                    key='responsible_name_col_select'
-                )
-            with col2:
-                # Nova coluna para o nome do aluno
-                student_name_col = st.selectbox(
-                    "Coluna do Nome do Aluno:", 
-                    columns, 
-                    index=min(1, len(columns)-1), # Tenta selecionar a segunda coluna
-                    key='student_name_col_select'
-                )
-            with col3:
-                # Tentativa de pré-seleção para 'phone'
-                default_phone_index = next((i for i, col in enumerate(columns) if 'phone' in col.lower() or 'numero' in col.lower()), 0)
-                phone_col = st.selectbox(
-                    "Coluna do Número de Telefone:", 
-                    columns, 
-                    index=default_phone_index, 
-                    key='phone_col_select'
-                )
+            # Garante que as colunas fixas existem antes de prosseguir
+            required_cols = [fixed_responsible_name_col, fixed_student_name_col, fixed_phone_col, fixed_turma_name_col]
+            missing_cols = [col for col in required_cols if col not in columns]
             
-            # Coluna para DDD/CC
+            if missing_cols:
+                st.error(f"As seguintes colunas necessárias não foram encontradas no arquivo: {', '.join(missing_cols)}. Por favor, verifique os nomes definidos no código.")
+                return
+
+            # Exibe as colunas fixas (Somente para informação do usuário)
+            st.subheader("Colunas Mapeadas Automaticamente:")
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                st.markdown(f"**Nome do Responsável:** `{fixed_responsible_name_col}`")
+                st.markdown(f"**Nome do Aluno:** `{fixed_student_name_col}`")
+            with col_info2:
+                st.markdown(f"**Nome da Turma:** `{fixed_turma_name_col}`")
+                st.markdown(f"**Número de Telefone:** `{fixed_phone_col}`")
+
+            
+            # Armazenamento das colunas fixas na session_state
+            st.session_state['responsible_name_col'] = fixed_responsible_name_col
+            st.session_state['student_name_col'] = fixed_student_name_col
+            st.session_state['phone_col'] = fixed_phone_col
+            st.session_state['turma_name_col'] = fixed_turma_name_col # Novo
+            # =========================================================================
+            
+            # Coluna para DDD/CC (mantida como input para flexibilidade do usuário)
             cc_col, ddd_col = st.columns([1, 2])
             with ddd_col:
                 default_cc_ddd = st.text_input(
@@ -357,9 +368,6 @@ def main():
                     help="Código de País (Ex: 55) + DDD (Ex: 31). Essencial para padronizar números locais."
                 )
             
-            st.session_state['responsible_name_col'] = responsible_name_col # Atualizado
-            st.session_state['student_name_col'] = student_name_col         # Novo
-            st.session_state['phone_col'] = phone_col
             st.session_state['default_cc'] = re.sub(r'\D', '', default_cc_ddd) # Limpa e armazena
             
             st.markdown("---")
@@ -386,9 +394,10 @@ def main():
                     with st.spinner('Processando e limpando dados para VCF...'):
                         vcf_content = generate_vcf_content(
                             df, 
-                            st.session_state['responsible_name_col'], # Atualizado
-                            st.session_state['student_name_col'],     # Novo
+                            st.session_state['responsible_name_col'], 
+                            st.session_state['student_name_col'],     
                             st.session_state['phone_col'], 
+                            st.session_state['turma_name_col'], # Novo
                             st.session_state['default_cc'],
                             failed_contacts, # Lista de falhas
                             successful_contacts # Lista de sucesso
@@ -419,8 +428,8 @@ def main():
                         st.subheader("✅ Contatos Padronizados (Incluídos no VCF)")
                         st.info(f"Total de {len(successful_contacts)} contatos validados.")
                         success_df = pd.DataFrame(successful_contacts)
-                        # Reordena colunas para exibir Nome do Responsável e Aluno primeiro
-                        columns_order = ["Índice_Linha_Original", "Nome do Responsável", "Nome do Aluno", "Número Original", "Número Padronizado (E.164)", "Visualização VCF"]
+                        # Reordena colunas
+                        columns_order = ["Índice_Linha_Original", "Nome do Responsável", "Nome do Aluno", "Nome da Turma", "Número Original", "Número Padronizado (E.164)", "Visualização VCF"]
                         success_df = success_df[columns_order]
                         st.dataframe(
                             success_df,
@@ -436,15 +445,48 @@ def main():
                         
                         # Converte a lista de dicionários para DataFrame para exibição no Streamlit
                         failed_df = pd.DataFrame(failed_contacts)
-                        # Reordena colunas para exibir Nome do Responsável e Aluno primeiro
-                        failed_columns_order = ["Índice_Linha_Original", "Nome do Responsável", "Nome do Aluno", "Motivo_da_Falha", "Explicação_AI", "Número Original"]
                         
-                        # Tenta reordenar, se as colunas existirem no DataFrame
+                        # Definição das colunas de exibição e suas configurações
+                        failed_columns_config = {
+                            "Índice_Linha_Original": st.column_config.NumberColumn("Linha"),
+                            "Nome do Responsável": st.column_config.TextColumn("Responsável"),
+                            "Nome do Aluno": st.column_config.TextColumn("Aluno"),
+                            "Nome da Turma": st.column_config.TextColumn("Turma"), # Novo
+                            "Telefone": st.column_config.TextColumn("Telefone"), # Novo
+                            "Motivo_da_Falha": st.column_config.Column(
+                                "Motivo da Falha",
+                                width="large",
+                                help="Por que o número falhou na padronização.",
+                            ),
+                            "Explicação_AI": st.column_config.Column(
+                                "Explicação_AI",
+                                width="large",
+                                help="Diagnóstico da AI para o formato incorreto."
+                            ),
+                            # Adicionar as demais colunas do Excel para 'Dados Completos'
+                        }
+                        
+                        # Reordena colunas para exibir as colunas chave primeiro
+                        failed_columns_order = [
+                            "Índice_Linha_Original", 
+                            "Nome do Responsável", 
+                            "Nome do Aluno", 
+                            "Nome da Turma", 
+                            "Telefone",
+                            "Motivo_da_Falha", 
+                            "Explicação_AI"
+                        ]
+                        
+                        # Garante que apenas colunas existentes sejam usadas
                         existing_cols = [col for col in failed_columns_order if col in failed_df.columns]
                         failed_df = failed_df[existing_cols]
 
+                        # Filtrar o column_config para apenas colunas existentes e usáveis
+                        config_to_use = {k: v for k, v in failed_columns_config.items() if k in existing_cols}
+
                         st.dataframe(
                             failed_df, 
+                            column_config=config_to_use, # Aplica a configuração para estender a visualização
                             use_container_width=True,
                             height=300 
                         )
