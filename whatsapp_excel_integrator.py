@@ -135,8 +135,6 @@ def send_whatsapp_template_message(
                     ]
                 }
             ]
-                }
-            ]
         }
     }
     
