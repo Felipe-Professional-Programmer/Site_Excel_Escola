@@ -34,8 +34,16 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
     # Verifica se o número já tem o CC (Ex: 55)
     has_cc = cleaned_number.startswith(CC)
     
-    # NOVO REQUISITO EXCLUSIVO: Número com exatamente 10 dígitos (DD + 8 dígitos)
-    # Assumimos que falta o '9' para ser um celular brasileiro de 9 dígitos.
+    # NOVO REQUISITO: Tratamento de números de 12 dígitos que são 55 + DD + 8 dígitos (faltando o '9')
+    if phone_length == 12 and has_cc:
+        # Padrão: 55 + DD + 8 dígitos. É um celular brasileiro antigo que precisa do '9'
+        # Estrutura: CC (2) + DD (2) + 8 dígitos (8) = 12 dígitos
+        
+        # Inferred: CC (2) + DD (2) + '9' (1) + 8 dígitos (8) = 13 dígitos
+        inferred_number = cleaned_number[:4] + '9' + cleaned_number[4:]
+        return inferred_number, None
+        
+    # REQUISITO ANTERIOR: Número com exatamente 10 dígitos (DD + 8 dígitos, assumindo falta de 55 e '9')
     if phone_length == 10:
         # O número é DD + 8 dígitos (ex: 3187654321).
         # A nova regra diz para inferir o '9' que estava faltando
@@ -61,14 +69,16 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Tuple
             return CC + cleaned_number, None
 
     # Caso 3: Número Internacional Completo (12 ou 13 dígitos).
-    # Ex: 5531987654321 (13 digitos) ou 551198765432 (12 digitos, fixo antigo)
+    # O caso de 12 dígitos com 55 + DD + 8 já foi tratado acima.
     if phone_length in [12, 13]:
-        # Se já começa com o CC (55), está correto.
-        if has_cc:
+        # Se já começa com o CC (55) e tem 13 dígitos, está correto.
+        if has_cc and phone_length == 13:
             return cleaned_number, None
-        # Se não tem o CC, e tem 12 ou 13, assumimos que o CC está faltando.
-        return CC + cleaned_number, None
         
+        # Se tem 12 dígitos, mas não começa com o CC (ex: é um outro país),
+        # ou se tem 13 mas não começa com 55, é complexo, mas por padrão brasileiro
+        # ele deve ser 13 dígitos com 55.
+
     # Caso 4: Outros tamanhos (Muito longo ou muito curto/Inválido)
     if phone_length < 8:
         return None, f"Número muito curto ({phone_length} dígitos)."
@@ -419,7 +429,7 @@ def main():
 
                         # Atualiza o DataFrame do relatório
                         results_df.loc[index] = current_result
-                        results_container.dataframe(results_df.style.apply(lambda s: ['background-color: #ffcccc' if 'Falha' in v else '' for v in s], subset=['Status', 'Detalhe da Falha']))
+                        results_container.dataframe(results_df.style.apply(lambda s: ['background-color: #ffcccc' if 'Falha' in v else '' for v in v in s], subset=['Status', 'Detalhe da Falha']))
                         
                         # Atualiza o log de progresso
                         status_log.write(f"Processando contato {index+1}/{total_rows}... (Sucessos: {success_count}, Falhas: {failure_count})")
