@@ -20,7 +20,8 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Optio
     if not number:
         return None
     
-    # 1. Converte para string e remove todos os caracteres não-dígitos
+    # PASSO 1 CRÍTICO: Converte para string e remove TODOS os caracteres não-dígitos
+    # Esta é a base de todas as regras.
     cleaned_number = re.sub(r'\D', '', str(number))
     
     # ----------------------------------------------------------------------
@@ -43,7 +44,8 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Optio
     # Caso 1: Número Local (8 ou 9 dígitos). Faltam CC e DD.
     if phone_length in [8, 9]:
         # Completa com o CC e DD padrão (Ex: 55 + 31 + 987654321)
-        return CC + DD + cleaned_number
+        final_number = CC + DD + cleaned_number
+        return re.sub(r'\D', '', final_number)
 
     # Caso 2: Número com DDD (11 dígitos). Falta o CC.
     # Ex: 31987654321
@@ -51,20 +53,24 @@ def clean_and_standardize_phone(number: str, default_country_code: str) -> Optio
         # Verifica se começa com o DDD configurado (Ex: 31)
         if cleaned_number.startswith(DD):
             # Completa com o CC (Ex: 55 + 31987654321)
-            return CC + cleaned_number
+            final_number = CC + cleaned_number
+            return re.sub(r'\D', '', final_number)
         else:
             # Não começa com o DDD configurado, mas tem 11 dígitos.
             # Assumimos que o CC está faltando, completamos para ser seguro.
-            return CC + cleaned_number
+            final_number = CC + cleaned_number
+            return re.sub(r'\D', '', final_number)
+
 
     # Caso 3: Número Internacional Completo (12 ou 13 dígitos).
-    # Ex: 5531987654321 (13 digitos) ou 551198765432 (12 digitos, fixo antigo)
+    # Ex: 5531987654321 (13 digitos)
     if phone_length in [12, 13]:
         # Se já começa com o CC (55), está correto.
         if has_cc:
             return cleaned_number
         # Se não tem o CC, e tem 12 ou 13, assumimos que o CC está faltando.
-        return CC + cleaned_number
+        final_number = CC + cleaned_number
+        return re.sub(r'\D', '', final_number)
         
     # Caso 4: Outros tamanhos (Muito longo).
     # Se for muito longo, mas começar com o CC, aceita. Caso contrário, descarta.
